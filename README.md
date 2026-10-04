@@ -23,5 +23,22 @@ Backend API for **Ghar Wapasi**, a platform designed to help identify missing an
 
 ```bash
 npm install
+cp .env.example .env    # then fill in DB_URL and DB_NAME
 npm run dev
 ```
+
+The server starts on `http://localhost:8080` by default (see `PORT` in `.env`).
+
+Mongo does not have to be running for the server to boot. Without it the process
+comes up anyway, `/health` reports `"database":"disconnected"`, and every `/api`
+route answers `503` - so the docs stay browsable while the database is down.
+
+## API docs
+
+Swagger UI: **http://localhost:8080/docs**
+
+Raw spec: `http://localhost:8080/docs/openapi.json`
+
+The spec is hand-written in `src/docs/openapi.ts` and covers the full surface -
+16 paths, 18 operations - including which cookie or header authenticates each
+one and the `503` every `/api` route returns when Mongo is unreachable.

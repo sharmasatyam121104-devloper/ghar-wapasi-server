@@ -7,5 +7,7 @@ export const env = {
     nodeEnv: read("NODE_ENV", "development"),
     port: Number(read("PORT", "8080")),
     clientUrl: read("CLIENT_URL", "http://localhost:5173"),
+    dbUrl: read("DB_URL", ""),
+    dbName: read("DB_NAME", ""),
     isProduction: read("NODE_ENV", "development") === "production",
 } as const;
