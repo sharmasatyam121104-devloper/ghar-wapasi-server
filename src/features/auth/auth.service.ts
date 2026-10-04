@@ -11,10 +11,12 @@ import { isPoliceOrNgo } from "../../shared/types/roles";
 import { EDIT_WINDOW_MS } from "../../shared/types/verification";
 import {
     isAadhaar,
+    isEmail,
+    isMobile,
     normalizeEmail,
     stripNonDigits,
 } from "../../shared/validators/validators";
-import { User, type UserDocument } from "../users/users.model";
+import { User } from "../users/users.model";
 import { toPublicUser } from "../users/users.serializers";
 import type { PublicUser, UserInterface } from "../users/users.types";
 
@@ -26,23 +28,62 @@ export interface LoginResult {
     updateWindowEndsAt?: Date;
 }
 
+/** Digits, spaces, hyphens and an optional `+` - the shapes a number gets typed in. */
+const NUMBER_INPUT = /^\+?[\d\s-]+$/;
+
 /**
- * Accepts an email or a 12-digit Aadhaar number, exactly like the frontend's
- * single login field. The role is always read from the stored record, never
- * from the request body.
+ * Drops an explicit `+91` country code. Only the `+` form is stripped: a bare
+ * leading `91` is left alone, because those two digits may be the start of a
+ * 12-digit Aadhaar.
  */
-export const login = async (identifier: string, password: string): Promise<LoginResult> => {
-    if (typeof identifier !== "string" || !identifier.trim()) {
-        throw ApiError.badRequest("Enter your email or 12-digit Aadhaar number.");
+const nationalNumber = (value: string): string => stripNonDigits(value.replace(/^\+\s*91/, ""));
+
+/**
+ * Turns whatever the login field holds into the stored field it could mean:
+ * an email, a 12-digit Aadhaar or a 10-digit mobile. A value matching no shape
+ * is rejected outright, so a typo gets a readable 400 instead of the generic
+ * "email or password is incorrect".
+ *
+ * Mobile is here because a public account registers without an email, and
+ * `toPublicUser` hands it back its mobile as `identifier` - that value has to
+ * be able to sign in.
+ */
+const identifierQuery = (raw: unknown): QueryFilter<UserInterface> => {
+    const invalid = (): ApiError =>
+        ApiError.badRequest(
+            "Enter a valid email address, 12-digit Aadhaar number or 10-digit mobile number.",
+        );
+
+    if (typeof raw !== "string" || !raw.trim()) throw invalid();
+
+    const value = raw.trim();
+
+    // The "@" is what separates the two worlds: without it, an email such as
+    // `123456789012@x.com` would be read as a 12-digit Aadhaar.
+    if (value.includes("@")) {
+        if (!isEmail(value)) throw invalid();
+        return { email: normalizeEmail(value) };
     }
+
+    if (!NUMBER_INPUT.test(value)) throw invalid();
+
+    const digits = nationalNumber(value);
+    if (isAadhaar(digits)) return { aadhaar: digits };
+    if (isMobile(digits)) return { mobile: digits };
+    throw invalid();
+};
+
+/**
+ * Accepts an email, a 12-digit Aadhaar number or a 10-digit mobile number,
+ * exactly like the frontend's single login field. The role is always read from
+ * the stored record, never from the request body.
+ */
+export const login = async (identifier: unknown, password: unknown): Promise<LoginResult> => {
+    const query = identifierQuery(identifier);
+
     if (typeof password !== "string" || !password) {
         throw ApiError.badRequest("Password is required.");
     }
-
-    const value = identifier.trim();
-    const query: QueryFilter<UserInterface> = isAadhaar(value)
-        ? { aadhaar: stripNonDigits(value) }
-        : { email: normalizeEmail(value) };
 
     const user = await User.findOne(query).select("+password");
     if (!user) {
@@ -83,9 +124,10 @@ export const login = async (identifier: string, password: string): Promise<Login
 /**
  * Rotating refresh tokens: only the newest one is accepted. Presenting an
  * older one means it leaked, so every session for this account is dropped.
+ * The caller resolves the token from the cookie or the request body.
  */
-export const refresh = async (refreshToken: string): Promise<AuthTokens> => {
-    if (typeof refreshToken !== "string" || !refreshToken) {
+export const refresh = async (refreshToken: string | null): Promise<AuthTokens> => {
+    if (!refreshToken || !refreshToken.trim()) {
         throw ApiError.unauthorized("A refresh token is required.");
     }
 
@@ -110,9 +152,25 @@ export const refresh = async (refreshToken: string): Promise<AuthTokens> => {
     return tokens;
 };
 
-export const logout = async (user: UserDocument): Promise<void> => {
-    user.refresh_token_hash = null;
-    await user.save();
+/**
+ * Identified by the refresh token rather than a verified request, so signing
+ * out still works once the access token has expired - otherwise the cookie
+ * would survive the logout and the user would look signed in. Every failure is
+ * swallowed: the caller clears the cookies regardless.
+ */
+export const logout = async (refreshToken: string | null): Promise<void> => {
+    if (!refreshToken) return;
+
+    try {
+        const payload = verifyRefreshToken(refreshToken);
+        const user = await User.findById(payload.sub).select("+refresh_token_hash");
+        if (!user) return;
+        user.refresh_token_hash = null;
+        await user.save();
+    } catch {
+        // An expired or tampered token cannot name an account, so there is
+        // nothing to revoke. The local session still gets cleared.
+    }
 };
 
 /**
@@ -120,14 +178,9 @@ export const logout = async (user: UserDocument): Promise<void> => {
  * "account not found" lets anyone enumerate registered users.
  */
 export const requestPasswordReset = async (identifier: unknown): Promise<{ message: string }> => {
-    if (typeof identifier !== "string" || !identifier.trim()) {
-        throw ApiError.badRequest("Enter your email or 12-digit Aadhaar number.");
-    }
+    const query = identifierQuery(identifier);
 
-    const value = identifier.trim();
-    const user = await User.findOne(
-        isAadhaar(value) ? { aadhaar: stripNonDigits(value) } : { email: normalizeEmail(value) },
-    )
+    const user = await User.findOne(query)
         .select("email")
         .lean();
 

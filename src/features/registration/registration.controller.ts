@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { ApiError } from "../../shared/errors/ApiError";
 import { asyncHandler } from "../../shared/http/asyncHandler";
+import { setAuthCookies } from "../../shared/http/cookies";
 import { requestBody } from "../../shared/http/request";
 import { sendCreated } from "../../shared/http/response";
 import { parseUserRole } from "../../shared/types/roles";
@@ -27,5 +28,6 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         ngo: payload.ngo as never,
     } as RegisterInput);
 
+    setAuthCookies(res, result.tokens);
     sendCreated(res, result, "Account created successfully.");
 });

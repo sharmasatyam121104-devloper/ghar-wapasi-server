@@ -8,6 +8,10 @@ const ISSUER = "ghar-wapasi-server";
 const ACCESS_TOKEN_TTL: SignOptions["expiresIn"] = "2h";
 const REFRESH_TOKEN_TTL: SignOptions["expiresIn"] = "7d";
 
+/** The same durations in milliseconds - the cookies' maxAge. */
+export const ACCESS_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
+export const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface AccessTokenPayload {
     sub: string;
     role: UserRole;

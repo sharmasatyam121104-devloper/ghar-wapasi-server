@@ -1,20 +1,15 @@
 import type { NextFunction, Request, Response } from "express";
 import { ApiError } from "../shared/errors/ApiError";
 import { asyncHandler } from "../shared/http/asyncHandler";
+import { readAccessToken } from "../shared/http/cookies";
 import { verifyAccessToken } from "../shared/tokens/jwt";
 import type { UserRole } from "../shared/types/roles";
 import { User, type UserDocument } from "../features/users/users.model";
 
-const extractBearer = (req: Request): string | null => {
-    const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer ")) return null;
-    const token = header.slice(7).trim();
-    return token || null;
-};
-
 /**
- * Requires a valid access token and loads the user. The account must still
- * exist and be active.
+ * Requires a valid access token and loads the user. The token may arrive in
+ * the `access_token` cookie (the web client) or as `Authorization: Bearer`
+ * (native and scripted clients). The account must still exist and be active.
  *
  * Note this does NOT require police/NGO accounts to be verified: they need
  * `/me` to read their own status and fix a rejected submission. Use
@@ -22,7 +17,7 @@ const extractBearer = (req: Request): string | null => {
  */
 export const requireAuth = asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
-        const token = extractBearer(req);
+        const token = readAccessToken(req);
         if (!token) throw ApiError.unauthorized();
 
         const payload = verifyAccessToken(token);
@@ -41,7 +36,7 @@ export const requireAuth = asyncHandler(
 /** Attaches the user when a token is present, but never rejects. */
 export const optionalAuth = asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
-        const token = extractBearer(req);
+        const token = readAccessToken(req);
         if (token) {
             try {
                 const payload = verifyAccessToken(token);
