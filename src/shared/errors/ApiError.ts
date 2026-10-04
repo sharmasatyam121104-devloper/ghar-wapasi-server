@@ -43,6 +43,10 @@ export class ApiError extends Error {
         return new ApiError(422, message, errors);
     }
 
+    static payloadTooLarge(message = "The request body is too large.") {
+        return new ApiError(413, message);
+    }
+
     static tooManyRequests(message = "Too many requests. Please try again later.") {
         return new ApiError(429, message);
     }

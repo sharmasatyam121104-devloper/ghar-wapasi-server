@@ -13,6 +13,39 @@ export const notFoundHandler = (req: Request, _res: Response, next: NextFunction
     next(ApiError.notFound(`Route ${req.method} ${req.originalUrl} does not exist.`));
 };
 
+interface BodyParserError {
+    type?: string;
+    status?: number;
+    expose?: boolean;
+}
+
+/**
+ * `express.json()` rejects a malformed or oversized body before any handler
+ * runs. That is the caller's mistake, not a bug in this service, so it has to
+ * come back as 4xx - without this it falls through to the generic 500, which
+ * in production reads as "our fault" and sends the caller debugging the wrong
+ * side.
+ */
+const translateBodyError = (error: unknown): ApiError | null => {
+    const err = error as BodyParserError | null;
+    if (!err?.type) return null;
+
+    if (err.type === "entity.parse.failed") {
+        return ApiError.badRequest("The request body is not valid JSON.");
+    }
+    if (err.type === "entity.too.large") {
+        return ApiError.payloadTooLarge();
+    }
+
+    // Anything else body-parser flagged as safe to show (`expose: true`) still
+    // carries its own status, so honour that instead of reporting a 500.
+    if (err.expose === true && typeof err.status === "number") {
+        return new ApiError(err.status, "The request body could not be read.");
+    }
+
+    return null;
+};
+
 const translateMongoError = (error: unknown): ApiError | null => {
     if (error instanceof mongoose.Error.ValidationError) {
         const errors: ErrorDetail = {};
@@ -48,8 +81,8 @@ export const errorHandler = (
     res: Response,
     _next: NextFunction,
 ): void => {
-    const translated = translateMongoError(error);
-    const apiError = translated ?? (error instanceof ApiError ? error : null);
+const translated = translateBodyError(error) ?? translateMongoError(error);
+const apiError = translated ?? (error instanceof ApiError ? error : null);
 
     if (apiError) {
         res.status(apiError.statusCode).json({
