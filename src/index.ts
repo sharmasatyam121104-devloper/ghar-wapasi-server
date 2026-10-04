@@ -1,47 +1,15 @@
-
-import dotenv from "dotenv";
-dotenv.config();
-
-import express from "express";
-import cors from "cors";
-import morgan from "morgan";
+// Side-effect import so every other module - including config/env - sees the
+// .env values as it loads.
+import "dotenv/config";
 
 import DBConnect from "./config/db.config";
-
-const app = express();
+import { env } from "./config/env.config";
+import { createApp } from "./app";
 
 DBConnect();
 
-app.use(
-    cors({
-    origin: [
-        process.env.CLIENT_URL || "http://localhost:5173",
-        "http://localhost:3000",
-    ],
-    credentials: true,
-    })
-);
+const app = createApp();
 
-app.use(morgan("dev"));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-
-
-import UserRouter from "./modules/user/user.routes";
-
-
-app.use('/user', UserRouter)
-
-app.get("/", (_req, res) => {
-    res.status(200).json({
-    success: true,
-    message: "ghar-wapasi-server is running successfully",
-    });
-});
-
-const PORT = process.env.PORT || 8080;
-
-app.listen(PORT, () => {
-    console.log(`ghar-wapasi-server running on http://localhost:${PORT}`);
+app.listen(env.port, () => {
+    console.log(`ghar-wapasi-server running on http://localhost:${env.port}`);
 });
