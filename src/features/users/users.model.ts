@@ -178,13 +178,14 @@ userSchema.pre("save", function stampSubmittedAt(this: UserDocument) {
 });
 
 /**
- * Only police and NGO accounts sit in the admin review queue. `public`
- * accounts are usable immediately and `admin` accounts are created by a
- * trusted seed/super-admin, so both start out verified.
+ * Only police and NGO accounts sit in the admin review queue. Everyone else -
+ * `public`, `admin` and the CLI-minted `superadmin` - starts out verified and
+ * can sign straight in. Written as the inverse of VERIFIABLE_ROLES so a new
+ * role is never left stuck at `pending` by default.
  */
 userSchema.pre("validate", function defaultVerificationStatus(this: UserDocument) {
     if (!this.isNew) return;
-    if (this.role === "public" || this.role === "admin") {
+    if (!(VERIFIABLE_ROLES as readonly UserRole[]).includes(this.role)) {
         this.verification_status = "verified";
     }
 });

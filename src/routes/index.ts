@@ -9,7 +9,7 @@ import verificationRoutes from "../features/verification/verification.routes";
  * surface is readable in one file. Mounted under `/api` by `app.ts`.
  *
  *   /api/auth          login, refresh, forgot-password, logout, password
- *   /api/register      public / police / ngo sign-up
+ *   /api/register      public / police / ngo sign-up, superadmin-only admin
  *   /api/users         own profile + admin listing
  *   /api/verification  admin review queue
  */
