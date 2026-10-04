@@ -2,6 +2,7 @@ import cors from "cors";
 import express, { type Express } from "express";
 import morgan from "morgan";
 import { env } from "./config/env.config";
+import { mountDocs } from "./docs/swagger";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
 import apiRoutes from "./routes";
 
@@ -20,10 +21,15 @@ export const createApp = (): Express => {
     app.use(express.json({ limit: "2mb" }));
     app.use(express.urlencoded({ extended: true }));
 
+    // Interactive docs plus the raw spec. Before `/api`, so `/docs` is never
+    // swallowed by the API router.
+    mountDocs(app);
+
     app.get("/", (_req, res) => {
         res.status(200).json({
             success: true,
             message: "ghar-wapasi-server is running successfully",
+            docs: "/docs",
         });
     });
 
