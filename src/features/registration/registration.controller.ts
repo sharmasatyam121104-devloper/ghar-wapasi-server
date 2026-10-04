@@ -4,30 +4,49 @@ import { asyncHandler } from "../../shared/http/asyncHandler";
 import { setAuthCookies } from "../../shared/http/cookies";
 import { requestBody } from "../../shared/http/request";
 import { sendCreated } from "../../shared/http/response";
-import { parseUserRole } from "../../shared/types/roles";
-import type { RegisterInput } from "./registration.service";
+import { parseUserRole, isSelfRegisterRole, type SelfRegisterRole } from "../../shared/types/roles";
 import { register as registerAccount } from "./registration.service";
 
-export const register = asyncHandler(async (req: Request, res: Response) => {
-    const payload = requestBody(req);
-    const role = parseUserRole(payload.role);
+/**
+ * Each role signs up at its own endpoint, so the role is decided by the path
+ * rather than by a field in the body. A caller can no longer create a police
+ * account through the public form by sending `role: "police"`, and each form
+ * only has to describe the fields its own role actually collects.
+ */
+const ENDPOINT_BY_ROLE: Record<SelfRegisterRole, string> = {
+    public: "/api/register",
+    police: "/api/register/police",
+    ngo: "/api/register/ngo",
+};
 
-    if (!role) {
-        throw ApiError.badRequest("Role must be one of: public, police, ngo.");
-    }
+/**
+ * Older clients sent `role` in the body. Honour it when it agrees with the
+ * path, and otherwise say which endpoint to use instead of silently creating
+ * the wrong kind of account.
+ */
+const assertRoleMatchesEndpoint = (claimed: unknown, role: SelfRegisterRole): void => {
+    if (claimed === undefined || claimed === null || claimed === "") return;
+    if (parseUserRole(claimed) === role) return;
 
-    const result = await registerAccount({
-        role,
-        first_name: payload.first_name as string,
-        last_name: payload.last_name as string,
-        aadhaar: payload.aadhaar as string,
-        mobile: payload.mobile as string,
-        email: payload.email as string,
-        password: payload.password as string,
-        police: payload.police as never,
-        ngo: payload.ngo as never,
-    } as RegisterInput);
+    const other = isSelfRegisterRole(claimed) ? ENDPOINT_BY_ROLE[claimed] : undefined;
+    throw ApiError.badRequest(
+        other
+            ? `This endpoint only creates a ${role} account. To sign up as ${claimed}, use POST ${other}.`
+            : `This endpoint only creates a ${role} account. Remove the "role" field - the endpoint already decides it.`,
+    );
+};
 
-    setAuthCookies(res, result.tokens);
-    sendCreated(res, result, "Account created successfully.");
-});
+const registerAs = (role: SelfRegisterRole) =>
+    asyncHandler(async (req: Request, res: Response) => {
+        const body = requestBody(req);
+        assertRoleMatchesEndpoint(body.role, role);
+
+        const result = await registerAccount(role, body);
+
+        setAuthCookies(res, result.tokens);
+        sendCreated(res, result, "Account created successfully.");
+    });
+
+export const registerPublic = registerAs("public");
+export const registerPolice = registerAs("police");
+export const registerNgo = registerAs("ngo");
