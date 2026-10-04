@@ -24,6 +24,8 @@ export interface NormalizedRegistration {
     aadhaar: string;
     mobile: string;
     email: string;
+    /** Only ever returned once it has passed `isStrongEnough`. */
+    password: string;
 }
 
 /** An officer's service record plus at least one ID card photo to verify. */
@@ -120,9 +122,10 @@ export const validateRegistration = (
         errors.email = "An email address is required for police and NGO accounts.";
     }
 
-    if (typeof body.password !== "string" || !body.password) {
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!password) {
         errors.password = "Password is required.";
-    } else if (!isStrongEnough(body.password)) {
+    } else if (!isStrongEnough(password)) {
         errors.password = "Password must be at least 6 characters.";
     }
 
@@ -135,5 +138,6 @@ export const validateRegistration = (
         aadhaar: stripNonDigits(aadhaarRaw),
         mobile: stripNonDigits(mobileRaw),
         email: emailRaw ? normalizeEmail(emailRaw) : "",
+        password,
     };
 };

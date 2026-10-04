@@ -13,6 +13,18 @@ export const VERIFIABLE_ROLES: readonly UserRole[] = ["police", "ngo"] as const;
 export const isPoliceOrNgo = (role: UserRole): boolean => role === "police" || role === "ngo";
 
 /**
+ * Roles a member may sign themselves up for. `admin` is deliberately absent -
+ * an admin account has to be provisioned out of band, never self-claimed.
+ */
+export const SELF_REGISTER_ROLES = ["public", "police", "ngo"] as const;
+
+export type SelfRegisterRole = (typeof SELF_REGISTER_ROLES)[number];
+
+/** Narrows to a role that may be self-registered. */
+export const isSelfRegisterRole = (value: unknown): value is SelfRegisterRole =>
+    typeof value === "string" && (SELF_REGISTER_ROLES as readonly string[]).includes(value.trim().toLowerCase());
+
+/**
  * Narrows an untrusted value (query string, request body) to a real role.
  * Returns undefined instead of throwing so callers can build a field error.
  */

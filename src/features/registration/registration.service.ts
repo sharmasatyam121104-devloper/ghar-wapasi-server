@@ -2,26 +2,16 @@ import type { QueryFilter } from "mongoose";
 import { Types } from "mongoose";
 import { ApiError, type ErrorDetail } from "../../shared/errors/ApiError";
 import { hashRefreshToken, issueTokens, type AuthTokens } from "../../shared/tokens/jwt";
-import { isPoliceOrNgo, type UserRole } from "../../shared/types/roles";
+import {
+    isPoliceOrNgo,
+    isSelfRegisterRole,
+    type SelfRegisterRole,
+    type UserRole,
+} from "../../shared/types/roles";
 import { User } from "../users/users.model";
 import { toPublicUser } from "../users/users.serializers";
 import type { NgoProfile, PoliceProfile, PublicUser, UserInterface } from "../users/users.types";
 import { validateRegistration } from "./registration.validators";
-
-/** Roles a member may sign themselves up for. `admin` is deliberately absent. */
-const SELF_REGISTER_ROLES: readonly UserRole[] = ["public", "police", "ngo"];
-
-export interface RegisterInput {
-    role: UserRole;
-    first_name: string;
-    last_name: string;
-    aadhaar: string;
-    mobile: string;
-    email: string;
-    password: string;
-    police?: PoliceProfile;
-    ngo?: NgoProfile;
-}
 
 export interface RegisterResult {
     user: PublicUser;
@@ -99,11 +89,16 @@ const assertIdentifiersAreFree = async (
     throw ApiError.conflict("An account with these details already exists.", errors);
 };
 
-export const register = async (input: RegisterInput): Promise<RegisterResult> => {
-    const body = input as unknown as Record<string, unknown>;
-    const role = input.role;
-
-    if (!SELF_REGISTER_ROLES.includes(role)) {
+/**
+ * `role` is passed in by the route, not read from the body, so it is not
+ * attacker-chosen. The runtime guard is belt and braces for the day this is
+ * called from somewhere other than a route literal.
+ */
+export const register = async (
+    role: SelfRegisterRole,
+    body: Record<string, unknown>,
+): Promise<RegisterResult> => {
+    if (!isSelfRegisterRole(role)) {
         // An admin account must be provisioned out of band, never self-claimed.
         throw ApiError.forbidden(
             "This role cannot be self-registered. Contact an administrator.",
@@ -131,7 +126,7 @@ export const register = async (input: RegisterInput): Promise<RegisterResult> =>
         aadhaar: identity.aadhaar,
         mobile: identity.mobile,
         ...(identity.email ? { email: identity.email } : {}),
-        password: input.password,
+        password: identity.password,
         role,
         assigned_admin_id: assignedAdminId,
         ...(role === "police" ? { police } : {}),
