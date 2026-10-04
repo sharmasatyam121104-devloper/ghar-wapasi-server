@@ -1,0 +1,99 @@
+import { maskAadhaar } from "../../shared/validators/validators";
+import type { VerificationStatus } from "../../shared/types/verification";
+import type { UserDocument } from "./users.model";
+import type { NgoProfile, PoliceProfile, PublicUser, UserInterface } from "./users.types";
+
+/** Turns a Mongoose subdocument into a plain object safe to spread. */
+export const plain = <T>(value: unknown): T | undefined => {
+    if (!value) return undefined;
+    const doc = value as { toObject?: () => T };
+    return typeof doc.toObject === "function" ? doc.toObject() : (value as T);
+};
+
+export const toPublicUser = (user: UserDocument | UserInterface): PublicUser => ({
+    id: String(user._id),
+    name: `${user.first_name} ${user.last_name}`.trim(),
+    first_name: user.first_name,
+    last_name: user.last_name,
+    role: user.role,
+    // Public accounts may have no email, so fall back to the mobile number.
+    identifier: user.email || user.mobile,
+    email: user.email,
+    aadhaar_masked: maskAadhaar(user.aadhaar),
+    mobile: user.mobile,
+    // The frontend scopes its whole admin console on this value.
+    adminId: user.role === "admin" ? String(user._id) : "",
+    verification_status: user.verification_status,
+    is_active: user.is_active,
+});
+
+export interface VerificationRecord extends PublicUser {
+    aadhaar: string;
+    state: string;
+    location: string;
+    organisation: string;
+    roleLabel: string;
+    status: VerificationStatus;
+    documents: string[];
+    submitted_at?: Date;
+    rejection_reason?: string;
+    reviewed_at?: Date;
+    assigned_admin_id: string | null;
+    profile: PoliceProfile | NgoProfile | undefined;
+    verification_call: {
+        link?: string;
+        time?: Date;
+        note?: string;
+        scheduled_by?: string;
+        scheduled_at?: Date;
+    } | null;
+}
+
+/** The staff-facing detail view - what an admin checks the documents against. */
+export const toVerificationRecord = (user: UserDocument): VerificationRecord => {
+    const isPolice = user.role === "police";
+    const isNgo = user.role === "ngo";
+
+    const files = isPolice
+        ? [...(user.police?.id_card_files ?? []), ...(user.police?.appointment_proof_files ?? [])]
+        : isNgo
+          ? [...(user.ngo?.reg_certificate_files ?? []), ...(user.ngo?.org_photo_files ?? [])]
+          : [];
+
+    const state = (isPolice ? user.police?.state : user.ngo?.state) ?? "";
+    const location = isNgo
+        ? [user.ngo?.city, user.ngo?.district].filter(Boolean).join(", ") || "—"
+        : [user.police?.station_name, user.police?.district].filter(Boolean).join(", ") || "—";
+    const organisation = isNgo ? (user.ngo?.org_name ?? "") : (user.police?.station_name ?? "");
+
+    const call = user.verification_call;
+
+    return {
+        ...toPublicUser(user),
+        aadhaar: maskAadhaar(user.aadhaar),
+        state,
+        location,
+        organisation,
+        roleLabel: isPolice ? "Police Officer" : "NGO Member",
+        status: user.verification_status,
+        documents: files,
+        submitted_at: user.submitted_at,
+        rejection_reason: user.rejection_reason,
+        reviewed_at: user.reviewed_at,
+        assigned_admin_id: user.assigned_admin_id ? String(user.assigned_admin_id) : null,
+        profile: isPolice
+            ? (plain<PoliceProfile>(user.police) ?? undefined)
+            : isNgo
+              ? (plain<NgoProfile>(user.ngo) ?? undefined)
+              : undefined,
+        verification_call: call
+            ? {
+                  link: call.link,
+                  time: call.time,
+                  note: call.note,
+                  scheduled_by: call.scheduled_by ? String(call.scheduled_by) : undefined,
+                  scheduled_at: call.scheduled_at,
+              }
+            : null,
+    };
+};
