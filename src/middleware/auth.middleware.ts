@@ -67,6 +67,14 @@ export const requireRole =
 
 export const requireAdmin = requireRole("admin");
 
+/**
+ * The only role that may create another admin. Separate from `requireAdmin` on
+ * purpose: an ordinary admin reviews verification requests, it does not get to
+ * mint more admins. The superadmin accounts themselves come from the admin CLI,
+ * so this is the top of the HTTP chain.
+ */
+export const requireSuperAdmin = requireRole("superadmin");
+
 /** Police and NGO accounts, verified or not. */
 export const requireStaff = requireRole("police", "ngo");
 

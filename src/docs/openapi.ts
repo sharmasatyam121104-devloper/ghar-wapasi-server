@@ -2,7 +2,7 @@
  * The API contract, written out by hand in one file.
  *
  * Hand-written rather than generated from JSDoc annotations: the whole surface
- * is 16 paths and 18 operations, and keeping the spec in a single readable
+ * is 19 paths and 21 operations, and keeping the spec in a single readable
  * file makes it reviewable in the same diff as the routes it documents. Every
  * path here has a counterpart in the mounted routers; if they ever disagree,
  * the spec is wrong.
@@ -144,6 +144,13 @@ export const openApiDocument = {
             "start `pending` and must be approved by an admin before their portal",
             "opens - `GET /api/users/me` still works while pending, so the applicant",
             "can read their status and fix a rejected submission.",
+            "",
+            "`admin` accounts are created by a `superadmin` through",
+            "`POST /api/register/admin`, and start `verified`. `superadmin` is a step",
+            "above that: it is the only role allowed to call that endpoint, and it is",
+            "minted by the admin CLI rather than over HTTP, so no API route creates",
+            "one. A superadmin is a provisioner only - it does not inherit the review",
+            "console, which stays with `admin`.",
         ].join("\n"),
     },
     servers: [
@@ -153,7 +160,7 @@ export const openApiDocument = {
     tags: [
         { name: "System", description: "Liveness and the root banner." },
         { name: "Auth", description: "Login, refresh, logout, password." },
-        { name: "Registration", description: "Public, police and NGO sign-up." },
+        { name: "Registration", description: "Public, police and NGO sign-up, and superadmin-only admin provisioning." },
         { name: "Profile", description: "The caller's own account." },
         { name: "Users", description: "Admin-only listing and lookup." },
         { name: "Verification", description: "Admin-only review queue for police and NGO." },
@@ -206,7 +213,10 @@ export const openApiDocument = {
                     name: { type: "string", example: "Asha Verma" },
                     first_name: { type: "string", example: "Asha" },
                     last_name: { type: "string", example: "Verma" },
-                    role: { type: "string", enum: ["public", "police", "ngo", "admin"] },
+                    role: {
+                        type: "string",
+                        enum: ["public", "police", "ngo", "admin", "superadmin"],
+                    },
                     identifier: {
                         type: "string",
                         description:
@@ -711,6 +721,63 @@ export const openApiDocument = {
                 },
             },
         },
+        "/api/register/admin": {
+            post: {
+                tags: ["Registration"],
+                operationId: "registerAdmin",
+                summary: "Create an admin account (superadmin only)",
+                description: [
+                    "Provisions another admin. Same fields as the public sign-up form and",
+                    "nothing more - an admin has no police or NGO record to verify - but the",
+                    "account is created `admin` and can sign in straight away.",
+                    "",
+                    "**Only a `superadmin` may call this.** An ordinary admin reviews",
+                    "verification requests; it cannot mint more admins. Every other role,",
+                    "signed in or not, gets 401 or 403.",
+                    "",
+                    "There is deliberately no endpoint for `superadmin` itself - those",
+                    "accounts are minted by the admin CLI, so no HTTP request can create",
+                    "one no matter which role it holds.",
+                    "",
+                    "Unlike the other three sign-ups this returns **no tokens and sets no",
+                    "cookies**. The caller is a superadmin acting for somebody else, so",
+                    "handing back a session would give them the new admin's identity and",
+                    "kick them out of their own browser. The new admin signs in itself.",
+                ].join("\n"),
+                requestBody: jsonBody({
+                    type: "object",
+                    required: ["first_name", "last_name", "aadhaar", "mobile", "password"],
+                    properties: {
+                        first_name: { type: "string", example: "Ravi" },
+                        last_name: { type: "string", example: "Menon" },
+                        aadhaar: { type: "string", example: "123456789012" },
+                        mobile: { type: "string", example: "9876543210" },
+                        email: {
+                            type: "string",
+                            description: "Optional, exactly as on the public form.",
+                            example: "ravi@gharwapsi.example",
+                        },
+                        password: { type: "string", format: "password", minLength: 6 },
+                    },
+                }),
+                responses: {
+                    201: ok(
+                        "Admin account created. The new admin signs in for themselves.",
+                        {
+                            type: "object",
+                            properties: { user: ref("User") },
+                        },
+                        "Admin account created successfully.",
+                    ),
+                    400: errorResponse("The body carries a `role` that is not `admin`."),
+                    401: failures.unauthorized,
+                    403: failures.forbidden,
+                    409: errorResponse("That Aadhaar, mobile or email is already registered."),
+                    422: errorResponse("Some details are invalid. See `errors`."),
+                    503: failures.unavailable,
+                },
+            },
+        },
         "/api/users/me": {
             get: {
                 tags: ["Profile"],
@@ -768,7 +835,10 @@ export const openApiDocument = {
                     {
                         name: "role",
                         in: "query",
-                        schema: { type: "string", enum: ["public", "police", "ngo", "admin"] },
+                        schema: {
+                            type: "string",
+                            enum: ["public", "police", "ngo", "admin", "superadmin"],
+                        },
                     },
                     {
                         name: "verificationStatus",
