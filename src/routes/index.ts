@@ -11,6 +11,9 @@ import verificationRoutes from "../features/verification/verification.routes";
  *   /api/auth          login, refresh, forgot-password, logout, password
  *   /api/register      public / police / ngo sign-up, superadmin-only admin
  *   /api/users         own profile + admin listing
+ *                      PATCH /me          public citizen - no approval
+ *                      PATCH /me/police   re-queued for an admin review
+ *                      PATCH /me/ngo      re-queued for an admin review
  *   /api/verification  admin review queue
  */
 const ApiRouter = Router();

@@ -40,5 +40,5 @@ Swagger UI: **http://localhost:8080/docs**
 Raw spec: `http://localhost:8080/docs/openapi.json`
 
 The spec is hand-written in `src/docs/openapi.ts` and covers the full surface -
-16 paths, 18 operations - including which cookie or header authenticates each
+21 paths, 23 operations - including which cookie or header authenticates each
 one and the `503` every `/api` route returns when Mongo is unreachable.
