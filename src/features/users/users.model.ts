@@ -58,6 +58,23 @@ const verificationCallSchema = new Schema(
     { _id: false },
 );
 
+/**
+ * Where a police or NGO member's OTP-verified contact change waits for an admin.
+ *
+ * Deliberately not applied to `email`/`mobile` on save: the live values stay put
+ * until `approveUser` promotes them, so a rejected request changes nothing.
+ */
+const pendingContactSchema = new Schema(
+    {
+        email: { type: String, trim: true, lowercase: true },
+        mobile: { type: String, trim: true },
+        email_otp_verified_at: { type: Date },
+        mobile_otp_verified_at: { type: Date },
+        requested_at: { type: Date, default: Date.now },
+    },
+    { _id: false },
+);
+
 const userSchema = new Schema<UserInterface>(
     {
         first_name: {
@@ -111,6 +128,8 @@ const userSchema = new Schema<UserInterface>(
         police: { type: policeProfileSchema },
         ngo: { type: ngoProfileSchema },
 
+        pending_contact: { type: pendingContactSchema },
+
         verification_status: {
             type: String,
             enum: {
@@ -162,6 +181,9 @@ userSchema.index({ role: 1, is_active: 1, verification_status: 1 });
 userSchema.index({ assigned_admin_id: 1, verification_status: 1 });
 userSchema.index({ "police.state": 1 });
 userSchema.index({ "ngo.state": 1 });
+
+/** Finds the staff accounts with a contact change waiting for a decision. */
+userSchema.index({ "pending_contact.email": 1, "pending_contact.mobile": 1 });
 
 userSchema.pre("save", async function hashPassword(this: UserDocument) {
     if (!this.isModified("password")) return;
