@@ -3,16 +3,8 @@ import { ApiError, type ErrorDetail } from "../../shared/errors/ApiError";
 import { isPoliceOrNgo, USER_ROLES } from "../../shared/types/roles";
 import { EDIT_WINDOW_MS } from "../../shared/types/verification";
 import { resolvePaging, type ListQuery, type ListResult } from "../../shared/http/pagination";
-import {
-    escapeRegex,
-    requiredField,
-} from "../../shared/validators/fields";
-import {
-    isEmail,
-    isMobile,
-    normalizeEmail,
-    stripNonDigits,
-} from "../../shared/validators/validators";
+import {escapeRegex, requiredField,} from "../../shared/validators/fields";
+import {isEmail,isMobile,normalizeEmail,stripNonDigits,} from "../../shared/validators/validators";
 import { User, type UserDocument } from "./users.model";
 import { plain, toPublicUser } from "./users.serializers";
 import type { NgoProfile, PoliceProfile, PublicUser, UserInterface } from "./users.types";
@@ -71,12 +63,61 @@ export const getMe = (user: UserDocument) => {
 /* ------------------------------------------------------------------ */
 
 /**
- * Police and NGO accounts are limited to the 6 hour window that starts at
- * submission, except a rejected account which may always fix and resubmit.
+ * The only police details a member may correct themselves: where they are
+ * posted and how to reach the reporting officer.
+ *
+ * Everything the admin actually checks is deliberately missing - the rank,
+ * badge number, station, state, employee ID, joining date, official email and
+ * the ID card photo. A verified account that could swap those could replace the
+ * very documents it was approved on, so a locked field is rejected by name
+ * rather than quietly dropped.
  */
-export const updateMe = async (user: UserDocument, body: Record<string, unknown>) => {
-    const errors: ErrorDetail = {};
+const SELF_EDITABLE_POLICE_FIELDS = ["district", "reporting_officer_contact"] as const;
 
+/** The same idea for an organisation: descriptive contact details only. */
+const SELF_EDITABLE_NGO_FIELDS = [
+    "address",
+    "city",
+    "district",
+    "website",
+    "designation",
+    "contact_email",
+] as const;
+
+/**
+ * Separates what the caller may change from what only an admin may change, and
+ * records an error per locked field so the form can show all of them at once.
+ */
+const splitProfileEdit = (
+    incoming: Record<string, unknown>,
+    allowed: readonly string[],
+    errors: ErrorDetail,
+    prefix: string,
+): Record<string, unknown> => {
+    const permitted: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(incoming)) {
+        if ((allowed as readonly string[]).includes(key)) {
+            permitted[key] = value;
+        } else {
+            errors[`${prefix}.${key}`] =
+                "This detail is checked by an admin and cannot be changed here. Ask the admin to correct it.";
+        }
+    }
+
+    return permitted;
+};
+
+/**
+ * Name, mobile and email - the only fields a plain citizen may change. Shared by
+ * all three update endpoints; the difference between them is what happens to the
+ * verification state afterwards, not this part.
+ */
+const applyIdentityFields = async (
+    user: UserDocument,
+    body: Record<string, unknown>,
+    errors: ErrorDetail,
+): Promise<void> => {
     if (body.first_name !== undefined) {
         const value = requiredField(body.first_name, "first_name", errors);
         if (value) user.first_name = value;
@@ -111,12 +152,71 @@ export const updateMe = async (user: UserDocument, body: Record<string, unknown>
             else user.email = email;
         }
     }
+};
 
-    const wantsProfileEdit =
-        (body.police !== undefined && user.role === "police") ||
-        (body.ngo !== undefined && user.role === "ngo");
+const throwOnErrors = (errors: ErrorDetail): void => {
+    if (Object.keys(errors).length > 0) {
+        throw ApiError.unprocessable("Please fix the highlighted details.", errors);
+    }
+};
 
-    if (wantsProfileEdit) {
+/**
+ * Sends a police or NGO member away from the plain endpoint, naming the one
+ * that belongs to them. Without this the citizen endpoint would happily accept
+ * a `police` block and skip the review entirely.
+ */
+const assertNotStaff = (user: UserDocument): void => {
+    if (isPoliceOrNgo(user.role)) {
+        throw ApiError.forbidden(
+            user.role === "police"
+                ? "Police accounts update through PATCH /api/users/me/police so the admin reviews the change."
+                : "NGO accounts update through PATCH /api/users/me/ngo so the admin reviews the change.",
+        );
+    }
+};
+
+/**
+ * The citizen endpoint: `PATCH /api/users/me`.
+ *
+ * A public citizen is not vetted, so there is nothing to re-approve. Name,
+ * mobile and email go in and stay verified - the verification state is never
+ * touched, which is what makes this different from the two staff endpoints.
+ */
+export const updatePublicProfile = async (user: UserDocument, body: Record<string, unknown>) => {
+    assertNotStaff(user);
+
+    const errors: ErrorDetail = {};
+    await applyIdentityFields(user, body, errors);
+
+    if (body.police !== undefined || body.ngo !== undefined) {
+        errors[body.police !== undefined ? "police" : "ngo"] =
+            "Only police and NGO accounts carry those details, and they are updated on their own endpoint.";
+    }
+
+    throwOnErrors(errors);
+
+    await user.save();
+    return getMe(user);
+};
+
+/**
+ * The police endpoint: `PATCH /api/users/me/police`.
+ *
+ * Every accepted change goes back to `pending` for a fresh admin review. A
+ * verified account is limited to the 6 hour window that starts at submission,
+ * except a rejected account which may always fix and resubmit.
+ */
+export const updatePoliceProfile = async (user: UserDocument,body: Record<string, unknown>,) => {
+    if (user.role !== "police") {
+        throw ApiError.forbidden("This endpoint is for police accounts only.");
+    }
+
+    const errors: ErrorDetail = {};
+    await applyIdentityFields(user, body, errors);
+
+    let profileChanged = false;
+
+    if (body.police !== undefined) {
         const endsAt = new Date((user.submitted_at?.getTime() ?? 0) + EDIT_WINDOW_MS);
         const withinWindow = endsAt.getTime() > Date.now();
         if (!withinWindow && user.verification_status === "verified") {
@@ -125,25 +225,30 @@ export const updateMe = async (user: UserDocument, body: Record<string, unknown>
             );
         }
 
-        if (body.police !== undefined && user.role === "police") {
-            const incoming = body.police as PoliceProfile;
-            if (incoming && typeof incoming === "object") {
-                user.set("police", { ...(plain<PoliceProfile>(user.police) ?? {}), ...incoming });
-            } else {
-                errors.police = "Police service details must be an object.";
+        if (body.police && typeof body.police === "object") {
+            const permitted = splitProfileEdit(
+                body.police as Record<string, unknown>,
+                SELF_EDITABLE_POLICE_FIELDS,
+                errors,
+                "police",
+            );
+            if (Object.keys(permitted).length > 0) {
+                user.set("police", {
+                    ...(plain<PoliceProfile>(user.police) ?? {}),
+                    ...permitted,
+                });
+                profileChanged = true;
             }
+        } else {
+            errors.police = "Police service details must be an object.";
         }
+    }
 
-        if (body.ngo !== undefined && user.role === "ngo") {
-            const incoming = body.ngo as NgoProfile;
-            if (incoming && typeof incoming === "object") {
-                user.set("ngo", { ...(plain<NgoProfile>(user.ngo) ?? {}), ...incoming });
-            } else {
-                errors.ngo = "Organisation details must be an object.";
-            }
-        }
+    throwOnErrors(errors);
 
-        // Any profile edit restarts the review clock and re-queues the account.
+    // Any accepted change restarts the review clock and re-queues the account,
+    // so the admin has to sign off again before the portal opens again.
+    if (profileChanged) {
         user.verification_status = "pending";
         user.rejection_reason = undefined;
         user.reviewed_at = undefined;
@@ -151,8 +256,56 @@ export const updateMe = async (user: UserDocument, body: Record<string, unknown>
         user.submitted_at = new Date();
     }
 
-    if (Object.keys(errors).length > 0) {
-        throw ApiError.unprocessable("Please fix the highlighted details.", errors);
+    await user.save();
+    return getMe(user);
+};
+
+/**
+ * The NGO endpoint: `PATCH /api/users/me/ngo`. Same review rule as police.
+ */
+export const updateNgoProfile = async (user: UserDocument, body: Record<string, unknown>) => {
+    if (user.role !== "ngo") {
+        throw ApiError.forbidden("This endpoint is for NGO accounts only.");
+    }
+
+    const errors: ErrorDetail = {};
+    await applyIdentityFields(user, body, errors);
+
+    let profileChanged = false;
+
+    if (body.ngo !== undefined) {
+        const endsAt = new Date((user.submitted_at?.getTime() ?? 0) + EDIT_WINDOW_MS);
+        const withinWindow = endsAt.getTime() > Date.now();
+        if (!withinWindow && user.verification_status === "verified") {
+            throw ApiError.forbidden(
+                "Your 6 hour update window has closed. Contact the admin if a correction is needed.",
+            );
+        }
+
+        if (body.ngo && typeof body.ngo === "object") {
+            const permitted = splitProfileEdit(
+                body.ngo as Record<string, unknown>,
+                SELF_EDITABLE_NGO_FIELDS,
+                errors,
+                "ngo",
+            );
+            if (Object.keys(permitted).length > 0) {
+                user.set("ngo", { ...(plain<NgoProfile>(user.ngo) ?? {}), ...permitted });
+                profileChanged = true;
+            }
+        } else {
+            errors.ngo = "Organisation details must be an object.";
+        }
+    }
+
+    throwOnErrors(errors);
+
+    if (profileChanged) {
+        user.verification_status = "pending";
+        user.rejection_reason = undefined;
+        user.reviewed_at = undefined;
+        user.reviewed_by = undefined;
+        user.submitted_at = new Date();
     }
 
     await user.save();

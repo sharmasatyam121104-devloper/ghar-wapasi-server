@@ -2,7 +2,7 @@
  * The API contract, written out by hand in one file.
  *
  * Hand-written rather than generated from JSDoc annotations: the whole surface
- * is 19 paths and 21 operations, and keeping the spec in a single readable
+ * is 21 paths and 23 operations, and keeping the spec in a single readable
  * file makes it reviewable in the same diff as the routes it documents. Every
  * path here has a counterpart in the mounted routers; if they ever disagree,
  * the spec is wrong.
@@ -792,14 +792,17 @@ export const openApiDocument = {
             },
             patch: {
                 tags: ["Profile"],
-                summary: "Update the caller's own account",
+                summary: "Update the caller's own account (citizen - no approval)",
                 description: [
                     "Only the fields present in the body are touched.",
                     "",
-                    "Editing a `police` or `ngo` profile restarts the review clock and puts",
-                    "the account back to `pending`, even if it was verified - so a",
-                    "verified account is limited to its 6 hour window. A rejected account",
-                    "may always fix and resubmit.",
+                    "**No admin approval.** A public citizen was never vetted, so there is",
+                    "nothing to re-approve. `first_name`, `last_name`, `mobile` and `email`",
+                    "go in and the account stays `verified`.",
+                    "",
+                    "Police and NGO members get `403` here and must use their own endpoint -",
+                    "`PATCH /api/users/me/police` or `PATCH /api/users/me/ngo` - because those",
+                    "re-queue the account for an admin review.",
                 ].join("\n"),
                 requestBody: jsonBody({
                     type: "object",
@@ -808,21 +811,161 @@ export const openApiDocument = {
                         last_name: { type: "string" },
                         mobile: { type: "string", example: "9876543210" },
                         email: { type: "string" },
-                        police: ref("PoliceProfile"),
-                        ngo: ref("NgoProfile"),
+                    },
+                }),
+                responses: {
+                    200: ok("Updated.", ref("Me"), "Profile updated successfully."),
+                    401: failures.unauthorized,
+                    403: errorResponse("A police or NGO account has to use its own update endpoint."),
+                    409: errorResponse("That mobile or email belongs to another account."),
+                    422: errorResponse("Some details are invalid. See `errors`."),
+                    503: failures.unavailable,
+                },
+            },
+        },
+        "/api/users/me/police": {
+            patch: {
+                tags: ["Profile"],
+                summary: "Update the caller's own police profile (admin reviews it)",
+                description: [
+                    "Police accounts only. Anything else gets `403`.",
+                    "",
+                    "**Admin approval is required.** An accepted change puts the account back",
+                    "to `pending`, clears the previous decision, resets `submitted_at` and",
+                    "re-queues it in the assigned admin's queue. The portal stays shut until",
+                    "the admin approves again, and approval itself needs a meeting link and",
+                    "time.",
+                    "",
+                    "**Only `district` and `reporting_officer_contact` are editable.** Every",
+                    "field the admin actually checks comes back as `422` if sent:",
+                    "",
+                    "  editable  `district`, `reporting_officer_contact`",
+                    "",
+                    "  locked    `rank`, `badge_number`, `station_name`, `state`,",
+                    "            `official_email`, `employee_id`, `joining_date`,",
+                    "            `reporting_officer`, `id_card_files`,",
+                    "            `appointment_proof_files`",
+                    "",
+                    "That is on purpose: if a verified officer could edit their own ID card",
+                    "photo or service record they could replace the very documents they were",
+                    "approved on. A locked field is reported by name rather than quietly",
+                    "dropped, and one locked field rejects the whole request.",
+                    "",
+                    "A verified account only has the 6 hour window that starts at submission;",
+                    "after that it gets `403` until an admin intervenes. A pending or rejected",
+                    "account may always fix and resubmit.",
+                ].join("\n"),
+                requestBody: jsonBody({
+                    type: "object",
+                    properties: {
+                        first_name: { type: "string" },
+                        last_name: { type: "string" },
+                        mobile: { type: "string", example: "9876543210" },
+                        email: { type: "string" },
+                        police: {
+                            type: "object",
+                            description:
+                                "Only the editable police fields are accepted. See the description above.",
+                            properties: {
+                                district: { type: "string", example: "Lucknow" },
+                                reporting_officer_contact: {
+                                    type: "string",
+                                    example: "9876500000",
+                                },
+                            },
+                            additionalProperties: {
+                                type: "string",
+                                description: "Rejected with 422 - these are admin-verified.",
+                            },
+                        },
                     },
                 }),
                 responses: {
                     200: ok(
-                        "Updated.",
+                        "Updated and re-queued for review.",
                         ref("Me"),
-                        "Profile updated successfully.",
+                        "Profile updated. An admin has to review it before your portal opens again.",
                     ),
                     401: failures.unauthorized,
-                    503: failures.unavailable,
-                    403: errorResponse("The 6 hour update window has closed for this verified account."),
+                    403: errorResponse(
+                        "Not a police account, or the 6 hour update window has closed for this verified account.",
+                    ),
                     409: errorResponse("That mobile or email belongs to another account."),
-                    422: errorResponse("Some details are invalid. See `errors`."),
+                    422: errorResponse(
+                        "Some details are invalid, or a locked admin-verified profile field was sent. See `errors`.",
+                    ),
+                    503: failures.unavailable,
+                },
+            },
+        },
+        "/api/users/me/ngo": {
+            patch: {
+                tags: ["Profile"],
+                summary: "Update the caller's own NGO profile (admin reviews it)",
+                description: [
+                    "NGO accounts only. Anything else gets `403`.",
+                    "",
+                    "**Admin approval is required**, exactly as for police: an accepted change",
+                    "puts the account back to `pending`, clears the previous decision, resets",
+                    "`submitted_at` and re-queues it for the assigned admin.",
+                    "",
+                    "**Only the descriptive fields are editable.** Everything the admin checks",
+                    "comes back as `422` if sent:",
+                    "",
+                    "  editable  `address`, `city`, `district`, `website`, `designation`,",
+                    "            `contact_email`",
+                    "",
+                    "  locked    `org_name`, `org_type`, `reg_number`, `state`,",
+                    "            `contact_person`, `contact_mobile`, `contact_aadhaar`,",
+                    "            `reg_certificate_files`, `org_photo_files`",
+                    "",
+                    "A locked field is reported by name rather than quietly dropped, and one",
+                    "locked field rejects the whole request.",
+                    "",
+                    "A verified account only has the 6 hour window that starts at submission;",
+                    "after that it gets `403` until an admin intervenes. A pending or rejected",
+                    "account may always fix and resubmit.",
+                ].join("\n"),
+                requestBody: jsonBody({
+                    type: "object",
+                    properties: {
+                        first_name: { type: "string" },
+                        last_name: { type: "string" },
+                        mobile: { type: "string", example: "9876543210" },
+                        email: { type: "string" },
+                        ngo: {
+                            type: "object",
+                            description: "Only the editable NGO fields are accepted.",
+                            properties: {
+                                address: { type: "string" },
+                                city: { type: "string" },
+                                district: { type: "string" },
+                                website: { type: "string" },
+                                designation: { type: "string" },
+                                contact_email: { type: "string" },
+                            },
+                            additionalProperties: {
+                                type: "string",
+                                description: "Rejected with 422 - these are admin-verified.",
+                            },
+                        },
+                    },
+                }),
+                responses: {
+                    200: ok(
+                        "Updated and re-queued for review.",
+                        ref("Me"),
+                        "Profile updated. An admin has to review it before your portal opens again.",
+                    ),
+                    401: failures.unauthorized,
+                    403: errorResponse(
+                        "Not an NGO account, or the 6 hour update window has closed for this verified account.",
+                    ),
+                    409: errorResponse("That mobile or email belongs to another account."),
+                    422: errorResponse(
+                        "Some details are invalid, or a locked admin-verified profile field was sent. See `errors`.",
+                    ),
+                    503: failures.unavailable,
                 },
             },
         },

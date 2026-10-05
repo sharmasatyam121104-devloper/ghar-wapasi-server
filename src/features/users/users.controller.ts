@@ -14,9 +14,28 @@ export const me = asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, usersService.getMe(currentUser(req)));
 });
 
-export const updateMe = asyncHandler(async (req: Request, res: Response) => {
-    const data = await usersService.updateMe(currentUser(req), requestBody(req));
+/**
+ * One handler per role, each pointing at its own service function, so the
+ * response message can tell the caller whether an admin still has to look at
+ * what they just sent.
+ */
+export const updatePublicProfile = asyncHandler(async (req: Request, res: Response) => {
+    const data = await usersService.updatePublicProfile(currentUser(req), requestBody(req));
     sendSuccess(res, data, { message: "Profile updated successfully." });
+});
+
+export const updatePoliceProfile = asyncHandler(async (req: Request, res: Response) => {
+    const data = await usersService.updatePoliceProfile(currentUser(req), requestBody(req));
+    sendSuccess(res, data, {
+        message: "Profile updated. An admin has to review it before your portal opens again.",
+    });
+});
+
+export const updateNgoProfile = asyncHandler(async (req: Request, res: Response) => {
+    const data = await usersService.updateNgoProfile(currentUser(req), requestBody(req));
+    sendSuccess(res, data, {
+        message: "Profile updated. An admin has to review it before your portal opens again.",
+    });
 });
 
 /* ------------------------------------------------------------------ */
