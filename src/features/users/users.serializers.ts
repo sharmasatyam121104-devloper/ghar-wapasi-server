@@ -40,6 +40,18 @@ export interface VerificationRecord extends PublicUser {
     reviewed_at?: Date;
     assigned_admin_id: string | null;
     profile: PoliceProfile | NgoProfile | undefined;
+    /**
+     * What the member is asking to change, and when each part was proved. The
+     * admin cannot sensibly judge a request they cannot read, so this is part of
+     * the record rather than something the UI has to fetch separately.
+     */
+    pending_contact: {
+        email?: string;
+        mobile?: string;
+        email_otp_verified_at?: Date;
+        mobile_otp_verified_at?: Date;
+        requested_at?: Date;
+    } | null;
     verification_call: {
         link?: string;
         time?: Date;
@@ -86,6 +98,15 @@ export const toVerificationRecord = (user: UserDocument): VerificationRecord => 
             : isNgo
               ? (plain<NgoProfile>(user.ngo) ?? undefined)
               : undefined,
+        pending_contact: user.pending_contact
+            ? {
+                  email: user.pending_contact.email,
+                  mobile: user.pending_contact.mobile,
+                  email_otp_verified_at: user.pending_contact.email_otp_verified_at,
+                  mobile_otp_verified_at: user.pending_contact.mobile_otp_verified_at,
+                  requested_at: user.pending_contact.requested_at,
+              }
+            : null,
         verification_call: call
             ? {
                   link: call.link,

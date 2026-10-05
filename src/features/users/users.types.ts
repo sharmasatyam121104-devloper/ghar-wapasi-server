@@ -44,6 +44,22 @@ export interface NgoProfile {
     org_photo_files?: string[];
 }
 
+/**
+ * A police or NGO member's proposed new contact details.
+ *
+ * Their live `email`/`mobile` keep working until an admin approves, so a rejected
+ * request leaves nothing behind. Each field carries its own proof timestamp: the
+ * OTP only establishes that the member controls the destination, which is why an
+ * approval is still required before either one is promoted.
+ */
+export interface PendingContactChange {
+    email?: string;
+    mobile?: string;
+    email_otp_verified_at?: Date;
+    mobile_otp_verified_at?: Date;
+    requested_at?: Date;
+}
+
 export interface UserInterface {
     _id: Types.ObjectId;
 
@@ -62,6 +78,9 @@ export interface UserInterface {
 
     police?: PoliceProfile;
     ngo?: NgoProfile;
+
+    /** Only police and NGO carry one, and only between an approved OTP and a decision. */
+    pending_contact?: PendingContactChange;
 
     verification_status: VerificationStatus;
     submitted_at?: Date;

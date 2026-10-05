@@ -54,4 +54,14 @@ export class ApiError extends Error {
     static internal(message = "Something went wrong.") {
         return new ApiError(500, message);
     }
+
+    /**
+     * A dependency we need is not there - the database is down, or a provider we
+     * have not wired up yet. Distinct from 500: nothing is wrong with the request
+     * and the same request may well succeed a minute later, so a client should
+     * not treat it as a bad input.
+     */
+    static serviceUnavailable(message = "This service is temporarily unavailable.") {
+        return new ApiError(503, message);
+    }
 }

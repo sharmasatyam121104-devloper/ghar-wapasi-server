@@ -7,7 +7,14 @@ import {escapeRegex, requiredField,} from "../../shared/validators/fields";
 import {isEmail,isMobile,normalizeEmail,stripNonDigits,} from "../../shared/validators/validators";
 import { User, type UserDocument } from "./users.model";
 import { plain, toPublicUser } from "./users.serializers";
-import type { NgoProfile, PoliceProfile, PublicUser, UserInterface } from "./users.types";
+import type {
+    NgoProfile,
+    PendingContactChange,
+    PoliceProfile,
+    PublicUser,
+    UserInterface,
+} from "./users.types";
+import { consumeReceipt } from "../otp/otp.service";
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                               */
@@ -29,6 +36,9 @@ export const getMe = (user: UserDocument) => {
         user: toPublicUser(user),
         police: plain<PoliceProfile>(user.police) ?? null,
         ngo: plain<NgoProfile>(user.ngo) ?? null,
+        // What the member asked to change, so the form can show "waiting for an
+        // admin" against the new contact instead of the one still in force.
+        pending_contact: plain<PendingContactChange>(user.pending_contact) ?? null,
         verification_call: user.verification_call
             ? {
                   link: user.verification_call.link,
@@ -109,49 +119,170 @@ const splitProfileEdit = (
 };
 
 /**
- * Name, mobile and email - the only fields a plain citizen may change. Shared by
- * all three update endpoints; the difference between them is what happens to the
- * verification state afterwards, not this part.
+ * Name only. Never gated by a code: a person can spell their own name.
  */
-const applyIdentityFields = async (
+/**
+ * Applies `first_name` and `last_name` if present, and reports whether anything
+ * was actually applied.
+ *
+ * The return value is what decides whether a police or NGO account goes back for
+ * review, so it counts a name that was sent rather than one that differs - a
+ * client that resubmits a whole form should re-queue just as it does for a
+ * profile field. An absent or blank name is an error, not a silent skip, so the
+ * report can only be `true` for a value that will be saved.
+ */
+const applyNames = (
     user: UserDocument,
     body: Record<string, unknown>,
     errors: ErrorDetail,
-): Promise<void> => {
+): boolean => {
+    let applied = false;
+
     if (body.first_name !== undefined) {
         const value = requiredField(body.first_name, "first_name", errors);
-        if (value) user.first_name = value;
+        if (value) {
+            user.first_name = value;
+            applied = true;
+        }
     }
+
     if (body.last_name !== undefined) {
         const value = requiredField(body.last_name, "last_name", errors);
-        if (value) user.last_name = value;
+        if (value) {
+            user.last_name = value;
+            applied = true;
+        }
+    }
+
+    return applied;
+};
+/** A contact change that has been proved with a code, plus when it was proved. */
+interface ContactChange {
+    email?: string;
+    mobile?: string;
+    emailVerifiedAt?: Date;
+    mobileVerifiedAt?: Date;
+}
+
+/**
+ * Picks the receipt for one contact field.
+ *
+ * `email_otp_token` / `mobile_otp_token` are always unambiguous. The plain
+ * `otp_token` is accepted as a convenience when exactly one contact field is
+ * changing in the request - which is the normal case - and ignored when both are,
+ * because then it would be guesswork.
+ */
+const receiptFor = (body: Record<string, unknown>, field: "email" | "mobile"): unknown => {
+    const perField = body[`${field}_otp_token`];
+    if (perField !== undefined) return perField;
+
+    const changing = (body.email !== undefined ? 1 : 0) + (body.mobile !== undefined ? 1 : 0);
+    return changing === 1 ? body.otp_token : undefined;
+};
+
+/** Already used by somebody else - checked again at approval time as well. */
+const contactTaken = async (
+    user: UserDocument,
+    filter: { email?: string; mobile?: string },
+): Promise<boolean> => {
+    const taken = await User.findOne({ ...filter, _id: { $ne: user._id } })
+        .select("_id")
+        .lean();
+    return Boolean(taken);
+};
+
+/**
+ * Validates the requested contact change *before* any receipt is spent.
+ *
+ * The order matters: consuming a receipt is irreversible, so every format and
+ * availability error is collected first and thrown together. By the time a code
+ * is burned the request is known to be otherwise sound.
+ */
+const validateContactChange = async (
+    user: UserDocument,
+    body: Record<string, unknown>,
+    errors: ErrorDetail,
+): Promise<{ email?: string; mobile?: string }> => {
+    const wanted: { email?: string; mobile?: string } = {};
+
+    if (body.email !== undefined) {
+        const email = normalizeEmail(String(body.email));
+        if (!isEmail(email)) errors.email = "Enter a valid email address.";
+        else if (email === user.email) errors.email = "That is already the email address on your account.";
+        else if (await contactTaken(user, { email })) {
+            errors.email = "This email is already registered.";
+        } else {
+            wanted.email = email;
+        }
     }
 
     if (body.mobile !== undefined) {
         const mobile = stripNonDigits(String(body.mobile));
-        if (!isMobile(mobile)) {
-            errors.mobile = "Enter a valid 10-digit mobile number.";
+        if (!isMobile(mobile)) errors.mobile = "Enter a valid 10-digit mobile number.";
+        else if (mobile === user.mobile) errors.mobile = "That is already the mobile number on your account.";
+        else if (await contactTaken(user, { mobile })) {
+            errors.mobile = "This mobile number is already registered.";
         } else {
-            const taken = await User.findOne({ mobile, _id: { $ne: user._id } })
-                .select("_id")
-                .lean();
-            if (taken) errors.mobile = "This mobile number is already registered.";
-            else user.mobile = mobile;
+            wanted.mobile = mobile;
         }
     }
 
-    if (body.email !== undefined) {
-        const email = normalizeEmail(String(body.email));
-        if (!isEmail(email)) {
-            errors.email = "Enter a valid email address.";
-        } else {
-            const taken = await User.findOne({ email, _id: { $ne: user._id } })
-                .select("_id")
-                .lean();
-            if (taken) errors.email = "This email is already registered.";
-            else user.email = email;
-        }
+    return wanted;
+};
+
+/**
+ * Spends the receipts for a validated contact change.
+ *
+ * This is the gate the whole feature exists for: a body may claim anything, but
+ * `otp_token` is only accepted when it matches a live, unconsumed, unexpired
+ * challenge belonging to this caller, issued for this purpose, sent to this
+ * exact destination.
+ */
+const proveContactChange = async (
+    user: UserDocument,
+    body: Record<string, unknown>,
+    wanted: { email?: string; mobile?: string },
+): Promise<ContactChange> => {
+    const change: ContactChange = {};
+
+    if (wanted.email) {
+        const receipt = await consumeReceipt(user, receiptFor(body, "email"), {
+            purpose: "PROFILE_EMAIL_CHANGE",
+            target: wanted.email,
+        });
+        change.email = wanted.email;
+        change.emailVerifiedAt = receipt.verified_at;
     }
+
+    if (wanted.mobile) {
+        const receipt = await consumeReceipt(user, receiptFor(body, "mobile"), {
+            purpose: "PROFILE_MOBILE_CHANGE",
+            target: wanted.mobile,
+        });
+        change.mobile = wanted.mobile;
+        change.mobileVerifiedAt = receipt.verified_at;
+    }
+
+    return change;
+};
+
+/**
+ * Stages a proved contact change for an admin instead of applying it.
+ *
+ * The live `email`/`mobile` are left alone on purpose: if the admin rejects the
+ * request nothing should have changed, and the old contact keeps working until
+ * they approve.
+ */
+const stageContactChange = (user: UserDocument, change: ContactChange): void => {
+    const existing = plain<PendingContactChange>(user.pending_contact) ?? {};
+
+    user.set("pending_contact", {
+        email: change.email ?? existing.email,
+        mobile: change.mobile ?? existing.mobile,
+        email_otp_verified_at: change.emailVerifiedAt ?? existing.email_otp_verified_at,
+        mobile_otp_verified_at: change.mobileVerifiedAt ?? existing.mobile_otp_verified_at,
+        requested_at: new Date(),
+    });
 };
 
 const throwOnErrors = (errors: ErrorDetail): void => {
@@ -176,24 +307,50 @@ const assertNotStaff = (user: UserDocument): void => {
 };
 
 /**
+ * The 6 hour self-service window, shared by every change that goes back for
+ * review - a name, a profile field or a contact.
+ *
+ * Only enforced for a `verified` account. A pending or rejected one can always
+ * fix and resubmit, which is the whole point of leaving it in that state.
+ */
+const assertInsideEditWindow = (user: UserDocument): void => {
+    if (user.verification_status !== "verified") return;
+
+    const endsAt = new Date((user.submitted_at?.getTime() ?? 0) + EDIT_WINDOW_MS);
+    if (endsAt.getTime() <= Date.now()) {
+        throw ApiError.forbidden(
+            "Your 6 hour update window has closed. Contact the admin if a correction is needed.",
+        );
+    }
+};
+
+/**
  * The citizen endpoint: `PATCH /api/users/me`.
  *
- * A public citizen is not vetted, so there is nothing to re-approve. Name,
- * mobile and email go in and stay verified - the verification state is never
- * touched, which is what makes this different from the two staff endpoints.
+ * A public citizen is not vetted, so there is nothing to re-approve. A name goes
+ * in directly. A new email or mobile has to be proved with a code first, and
+ * once the code is accepted the change lands immediately - the account stays
+ * verified, because a public account was never on hold in the first place.
  */
 export const updatePublicProfile = async (user: UserDocument, body: Record<string, unknown>) => {
     assertNotStaff(user);
 
     const errors: ErrorDetail = {};
-    await applyIdentityFields(user, body, errors);
+    applyNames(user, body, errors);
 
     if (body.police !== undefined || body.ngo !== undefined) {
         errors[body.police !== undefined ? "police" : "ngo"] =
             "Only police and NGO accounts carry those details, and they are updated on their own endpoint.";
     }
 
+    const wanted = await validateContactChange(user, body, errors);
     throwOnErrors(errors);
+
+    // Codes are only spent once the request is known to be otherwise valid.
+    const change = await proveContactChange(user, body, wanted);
+
+    if (change.email) user.email = change.email;
+    if (change.mobile) user.mobile = change.mobile;
 
     await user.save();
     return getMe(user);
@@ -202,29 +359,37 @@ export const updatePublicProfile = async (user: UserDocument, body: Record<strin
 /**
  * The police endpoint: `PATCH /api/users/me/police`.
  *
- * Every accepted change goes back to `pending` for a fresh admin review. A
- * verified account is limited to the 6 hour window that starts at submission,
- * except a rejected account which may always fix and resubmit.
+ * Every accepted change goes back to `pending` for a fresh admin review - a name
+ * exactly like a profile field, since a member's name is part of what an admin
+ * vets. A verified account is limited to the 6 hour window that starts at
+ * submission, except a rejected account which may always fix and resubmit.
+ *
+ * A new email or mobile needs a code *and* an admin. The code proves the member
+ * controls the destination; the approval is what actually changes the account,
+ * because a police or NGO contact is part of what an admin vets.
  */
 export const updatePoliceProfile = async (user: UserDocument,body: Record<string, unknown>,) => {
     if (user.role !== "police") {
         throw ApiError.forbidden("This endpoint is for police accounts only.");
     }
 
-    const errors: ErrorDetail = {};
-    await applyIdentityFields(user, body, errors);
+    // A name goes back for review too, so it has to sit inside the same window a
+    // profile field does - otherwise a verified officer could rename themselves
+    // after hours and knock their own account out of verified.
+    const wantsReview =
+        body.first_name !== undefined ||
+        body.last_name !== undefined ||
+        body.police !== undefined;
+    if (wantsReview) {
+        assertInsideEditWindow(user);
+    }
 
-    let profileChanged = false;
+    const errors: ErrorDetail = {};
+    let profileChanged = applyNames(user, body, errors);
+
+    const wanted = await validateContactChange(user, body, errors);
 
     if (body.police !== undefined) {
-        const endsAt = new Date((user.submitted_at?.getTime() ?? 0) + EDIT_WINDOW_MS);
-        const withinWindow = endsAt.getTime() > Date.now();
-        if (!withinWindow && user.verification_status === "verified") {
-            throw ApiError.forbidden(
-                "Your 6 hour update window has closed. Contact the admin if a correction is needed.",
-            );
-        }
-
         if (body.police && typeof body.police === "object") {
             const permitted = splitProfileEdit(
                 body.police as Record<string, unknown>,
@@ -246,6 +411,14 @@ export const updatePoliceProfile = async (user: UserDocument,body: Record<string
 
     throwOnErrors(errors);
 
+    const change = await proveContactChange(user, body, wanted);
+    if (change.email || change.mobile) {
+        // Held, not applied: `approveUser` promotes these and `rejectUser`
+        // discards them, so the live contact is untouched either way.
+        stageContactChange(user, change);
+        profileChanged = true;
+    }
+
     // Any accepted change restarts the review clock and re-queues the account,
     // so the admin has to sign off again before the portal opens again.
     if (profileChanged) {
@@ -261,27 +434,28 @@ export const updatePoliceProfile = async (user: UserDocument,body: Record<string
 };
 
 /**
- * The NGO endpoint: `PATCH /api/users/me/ngo`. Same review rule as police.
+ * The NGO endpoint: `PATCH /api/users/me/ngo`. Same review rule as police, and a
+ * name is reviewed the same way a profile field is.
  */
 export const updateNgoProfile = async (user: UserDocument, body: Record<string, unknown>) => {
     if (user.role !== "ngo") {
         throw ApiError.forbidden("This endpoint is for NGO accounts only.");
     }
 
-    const errors: ErrorDetail = {};
-    await applyIdentityFields(user, body, errors);
+    const wantsReview =
+        body.first_name !== undefined ||
+        body.last_name !== undefined ||
+        body.ngo !== undefined;
+    if (wantsReview) {
+        assertInsideEditWindow(user);
+    }
 
-    let profileChanged = false;
+    const errors: ErrorDetail = {};
+    let profileChanged = applyNames(user, body, errors);
+
+    const wanted = await validateContactChange(user, body, errors);
 
     if (body.ngo !== undefined) {
-        const endsAt = new Date((user.submitted_at?.getTime() ?? 0) + EDIT_WINDOW_MS);
-        const withinWindow = endsAt.getTime() > Date.now();
-        if (!withinWindow && user.verification_status === "verified") {
-            throw ApiError.forbidden(
-                "Your 6 hour update window has closed. Contact the admin if a correction is needed.",
-            );
-        }
-
         if (body.ngo && typeof body.ngo === "object") {
             const permitted = splitProfileEdit(
                 body.ngo as Record<string, unknown>,
@@ -299,6 +473,12 @@ export const updateNgoProfile = async (user: UserDocument, body: Record<string, 
     }
 
     throwOnErrors(errors);
+
+    const change = await proveContactChange(user, body, wanted);
+    if (change.email || change.mobile) {
+        stageContactChange(user, change);
+        profileChanged = true;
+    }
 
     if (profileChanged) {
         user.verification_status = "pending";

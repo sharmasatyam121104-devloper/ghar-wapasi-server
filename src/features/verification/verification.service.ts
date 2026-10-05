@@ -6,6 +6,7 @@ import { isPoliceOrNgo } from "../../shared/types/roles";
 import { escapeRegex } from "../../shared/validators/fields";
 import { isHttpUrl } from "../../shared/validators/validators";
 import { User, type UserDocument } from "../users/users.model";
+import { assertContactStillFree } from "../otp/otp.service";
 import {
     toVerificationRecord,
     type VerificationRecord,
@@ -182,6 +183,19 @@ export const approveUser = async (adminId: string, userId: string): Promise<Veri
         );
     }
 
+    // Promote an OTP-verified contact change here, and only here. A member's
+    // receipt proves they control the new destination; this approval is what
+    // makes it real. Availability is re-checked first because another account can
+    // have claimed it while the request sat in the queue.
+    const pending = user.pending_contact;
+    if (pending?.email || pending?.mobile) {
+        await assertContactStillFree(user, { email: pending.email, mobile: pending.mobile });
+
+        if (pending.email) user.email = pending.email;
+        if (pending.mobile) user.mobile = pending.mobile;
+    }
+    user.pending_contact = undefined;
+
     user.verification_status = "verified";
     user.rejection_reason = undefined;
     user.reviewed_by = adminId as unknown as Types.ObjectId;
@@ -208,6 +222,10 @@ export const rejectUser = async (
     }
 
     // Rejection deliberately does not require a scheduled call.
+    // A pending contact change is dropped rather than applied: the member keeps
+    // the email and mobile they had, so a rejection has no effect on sign-in.
+    user.pending_contact = undefined;
+
     user.verification_status = "rejected";
     user.rejection_reason = text;
     user.reviewed_by = adminId as unknown as Types.ObjectId;
