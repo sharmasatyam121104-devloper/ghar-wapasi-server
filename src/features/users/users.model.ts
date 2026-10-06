@@ -75,6 +75,7 @@ const pendingContactSchema = new Schema(
     { _id: false },
 );
 
+
 const userSchema = new Schema<UserInterface>(
     {
         first_name: {
