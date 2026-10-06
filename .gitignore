@@ -48,4 +48,6 @@ temp/
 # Misc
 *.tgz
 
-    
+# Local credential notes — never commit
+CREDENTIALS.md
+credentials*.md
