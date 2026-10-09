@@ -2,7 +2,7 @@
  * The API contract, written out by hand in one file.
  *
  * Hand-written rather than generated from JSDoc annotations: the whole surface
- * is 25 paths and 27 operations, and keeping the spec in a single readable
+ * is 28 paths and 30 operations, and keeping the spec in a single readable
  * file makes it reviewable in the same diff as the routes it documents. Every
  * path here has a counterpart in the mounted routers; if they ever disagree,
  * the spec is wrong.
@@ -166,6 +166,7 @@ export const openApiDocument = {
         { name: "OTP", description: "One-time codes, and the single-use receipts that authorise a contact change." },
         { name: "Users", description: "Admin-only listing and lookup." },
         { name: "Verification", description: "Admin-only review queue for police and NGO." },
+        { name: "Complaints", description: "Missing-person reports filed by a member, a police or an NGO account." },
     ],
     components: {
         securitySchemes: {
@@ -383,6 +384,162 @@ export const openApiDocument = {
                         },
                     },
                 ],
+            },
+            ComplaintEvent: {
+                type: "object",
+                description: "One entry in a report's timeline.",
+                properties: {
+                    title: { type: "string", example: "Complaint filed" },
+                    date: { type: "string", format: "date-time" },
+                    detail: { type: "string" },
+                    state: { type: "string", enum: ["done", "current", "pending"] },
+                },
+            },
+            Complaint: {
+                type: "object",
+                description:
+                    "A stored missing-person report. The Aadhaar numbers are masked, and the `*_files` arrays hold stored paths served by `GET /api/files/{role}/{userId}/{filename}`.",
+                properties: {
+                    id: { type: "string" },
+                    case_ref: { type: "string", example: "GW-2026-0112" },
+                    status: { type: "string", enum: ["active", "matched", "resolved"] },
+                    created_by: { type: "string", description: "The filing account's Mongo id." },
+                    created_by_role: { type: "string", enum: ["public", "police", "ngo"] },
+
+                    person_name: { type: "string" },
+                    person_age: { type: "integer", example: 34 },
+                    person_gender: { type: "string" },
+                    person_height: { type: "string" },
+                    person_build: { type: "string" },
+                    person_marks: { type: "string" },
+                    person_clothing: { type: "string" },
+                    person_medical_notes: { type: "string" },
+                    person_languages: { type: "string" },
+
+                    last_seen_date: { type: "string", format: "date-time" },
+                    last_seen_time: { type: "string", example: "18:30" },
+                    last_seen_place: { type: "string" },
+                    last_seen_city: { type: "string" },
+                    last_seen_area: { type: "string" },
+                    circumstances: { type: "string" },
+
+                    complainant_name: { type: "string" },
+                    complainant_relation: { type: "string" },
+                    complainant_aadhaar: { type: "string", example: "XXXX XXXX 1234" },
+                    complainant_mobile: { type: "string" },
+                    complainant_address: { type: "string" },
+
+                    member_name: { type: "string" },
+                    member_relation: { type: "string" },
+                    member_aadhaar: { type: "string", example: "XXXX XXXX 5678" },
+                    member_mobile: { type: "string" },
+
+                    police_station: { type: "string" },
+                    fir_number: { type: "string" },
+                    fir_date: { type: "string", format: "date-time" },
+
+                    person_photos: { type: "array", items: { type: "string" } },
+                    location_photos: { type: "array", items: { type: "string" } },
+                    complainant_id_files: { type: "array", items: { type: "string" } },
+                    member_id_files: { type: "array", items: { type: "string" } },
+                    fir_copy_files: { type: "array", items: { type: "string" } },
+
+                    timeline: { type: "array", items: ref("ComplaintEvent") },
+                    created_at: { type: "string", format: "date-time" },
+                    updated_at: { type: "string", format: "date-time" },
+                },
+            },
+            ComplaintInput: {
+                type: "object",
+                description:
+                    "The report to file. Upload every document first with `POST /api/files`, then pass the returned `tmp/*` references in the matching array; the server moves them into the filer's folder when the report is written.",
+                required: [
+                    "person_name",
+                    "person_age",
+                    "person_gender",
+                    "last_seen_date",
+                    "last_seen_place",
+                    "last_seen_city",
+                    "complainant_name",
+                    "complainant_relation",
+                    "complainant_aadhaar",
+                    "complainant_mobile",
+                    "complainant_address",
+                    "member_name",
+                    "member_relation",
+                    "member_aadhaar",
+                    "member_mobile",
+                    "police_station",
+                    "fir_number",
+                    "fir_date",
+                    "person_photos",
+                    "complainant_id_files",
+                    "member_id_files",
+                    "fir_copy_files",
+                ],
+                properties: {
+                    person_name: { type: "string" },
+                    person_age: { type: "integer", minimum: 0, example: 34 },
+                    person_gender: { type: "string" },
+                    person_height: { type: "string" },
+                    person_build: { type: "string" },
+                    person_marks: { type: "string" },
+                    person_clothing: { type: "string" },
+                    person_medical_notes: { type: "string" },
+                    person_languages: { type: "string" },
+
+                    last_seen_date: { type: "string", format: "date", example: "2026-09-14" },
+                    last_seen_time: { type: "string", example: "18:30" },
+                    last_seen_place: { type: "string" },
+                    last_seen_city: { type: "string" },
+                    last_seen_area: { type: "string" },
+                    circumstances: { type: "string" },
+
+                    complainant_name: { type: "string" },
+                    complainant_relation: { type: "string" },
+                    complainant_aadhaar: { type: "string", description: "12 digits." },
+                    complainant_mobile: { type: "string", description: "10 digits." },
+                    complainant_address: { type: "string" },
+
+                    member_name: { type: "string" },
+                    member_relation: { type: "string" },
+                    member_aadhaar: { type: "string", description: "12 digits." },
+                    member_mobile: { type: "string", description: "10 digits." },
+
+                    police_station: { type: "string" },
+                    fir_number: { type: "string" },
+                    fir_date: { type: "string", format: "date", example: "2026-09-15" },
+
+                    person_photos: {
+                        type: "array",
+                        items: { type: "string" },
+                        minItems: 1,
+                        description: "`tmp/*` references to photos of the missing person. At least one is required.",
+                    },
+                    location_photos: {
+                        type: "array",
+                        items: { type: "string" },
+                        description: "Optional `tmp/*` references to photos of the place last seen.",
+                    },
+                    complainant_id_files: {
+                        type: "array",
+                        items: { type: "string" },
+                        minItems: 1,
+                        description: "`tmp/*` references to the complainant's ID. At least one is required.",
+                    },
+                    member_id_files: {
+                        type: "array",
+                        items: { type: "string" },
+                        minItems: 1,
+                        description: "`tmp/*` references to the family member's ID. At least one is required.",
+                    },
+                    fir_copy_files: {
+                        type: "array",
+                        items: { type: "string" },
+                        minItems: 1,
+                        description: "`tmp/*` references to the filed police complaint (FIR) copy. At least one is required.",
+                    },
+                },
             },
             LoginResult: {
                 type: "object",
@@ -1586,6 +1743,74 @@ export const openApiDocument = {
                     401: failures.unauthorized,
                     403: errorResponse("Signed in, but the caller is neither the owner nor an admin."),
                     404: failures.notFound,
+                    503: failures.unavailable,
+                },
+            },
+        },
+        "/api/complaints/public": {
+            post: {
+                tags: ["Complaints"],
+                summary: "File a missing-person report (member)",
+                description: [
+                    "Files a report on behalf of the signed-in `public` account, which becomes",
+                    "the report's `created_by`. Upload every document first with",
+                    "`POST /api/files` and pass the returned `tmp/*` references in the matching",
+                    "arrays.",
+                    "",
+                    "The session's role decides which of the three endpoints can be reached, so a",
+                    "`public` token only works here - staff file through `/api/complaints/police`",
+                    "or `/api/complaints/ngo`.",
+                ].join("\n"),
+                requestBody: jsonBody(ref("ComplaintInput")),
+                responses: {
+                    201: ok("Report filed.", ref("Complaint"), "Complaint registered successfully."),
+                    401: failures.unauthorized,
+                    403: errorResponse("Signed in, but not as a `public` account."),
+                    422: errorResponse(
+                        "A required field is missing, an Aadhaar or mobile has the wrong length, or an uploaded file is no longer available.",
+                    ),
+                    503: failures.unavailable,
+                },
+            },
+        },
+        "/api/complaints/police": {
+            post: {
+                tags: ["Complaints"],
+                summary: "File a missing-person report (police)",
+                description: [
+                    "The police variant of `POST /api/complaints/public`. The report's",
+                    "`created_by_role` is `police`, and the uploaded files land in the filing",
+                    "officer's own folder (`police/<id>/`).",
+                ].join("\n"),
+                requestBody: jsonBody(ref("ComplaintInput")),
+                responses: {
+                    201: ok("Report filed.", ref("Complaint"), "Complaint registered successfully."),
+                    401: failures.unauthorized,
+                    403: errorResponse("Signed in, but not as a `police` account."),
+                    422: errorResponse(
+                        "A required field is missing, an Aadhaar or mobile has the wrong length, or an uploaded file is no longer available.",
+                    ),
+                    503: failures.unavailable,
+                },
+            },
+        },
+        "/api/complaints/ngo": {
+            post: {
+                tags: ["Complaints"],
+                summary: "File a missing-person report (NGO)",
+                description: [
+                    "The NGO variant of `POST /api/complaints/public`. The report's",
+                    "`created_by_role` is `ngo`, and the uploaded files land in the filing",
+                    "member's own folder (`ngo/<id>/`).",
+                ].join("\n"),
+                requestBody: jsonBody(ref("ComplaintInput")),
+                responses: {
+                    201: ok("Report filed.", ref("Complaint"), "Complaint registered successfully."),
+                    401: failures.unauthorized,
+                    403: errorResponse("Signed in, but not as an `ngo` account."),
+                    422: errorResponse(
+                        "A required field is missing, an Aadhaar or mobile has the wrong length, or an uploaded file is no longer available.",
+                    ),
                     503: failures.unavailable,
                 },
             },
