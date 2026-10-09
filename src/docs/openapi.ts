@@ -2,7 +2,7 @@
  * The API contract, written out by hand in one file.
  *
  * Hand-written rather than generated from JSDoc annotations: the whole surface
- * is 23 paths and 25 operations, and keeping the spec in a single readable
+ * is 25 paths and 27 operations, and keeping the spec in a single readable
  * file makes it reviewable in the same diff as the routes it documents. Every
  * path here has a counterpart in the mounted routers; if they ever disagree,
  * the spec is wrong.
@@ -161,6 +161,7 @@ export const openApiDocument = {
         { name: "System", description: "Liveness and the root banner." },
         { name: "Auth", description: "Login, refresh, logout, password." },
         { name: "Registration", description: "Public, police and NGO sign-up, and superadmin-only admin provisioning." },
+        { name: "Files", description: "Document uploads and delivery for police and NGO registration." },
         { name: "Profile", description: "The caller's own account." },
         { name: "OTP", description: "One-time codes, and the single-use receipts that authorise a contact change." },
         { name: "Users", description: "Admin-only listing and lookup." },
@@ -262,8 +263,18 @@ export const openApiDocument = {
                     joining_date: { type: "string", format: "date" },
                     reporting_officer: { type: "string" },
                     reporting_officer_contact: { type: "string" },
-                    id_card_files: { type: "array", items: { type: "string" } },
-                    appointment_proof_files: { type: "array", items: { type: "string" } },
+                    id_card_files: {
+                        type: "array",
+                        items: { type: "string" },
+                        description:
+                            "Stored paths (`police/<id>/<file>`) served by `GET /api/files/{role}/{userId}/{filename}`. Not accepted in a request body.",
+                    },
+                    appointment_proof_files: {
+                        type: "array",
+                        items: { type: "string" },
+                        description:
+                            "Stored paths served by the file endpoint. Not accepted in a request body.",
+                    },
                 },
             },
             NgoProfile: {
@@ -282,9 +293,96 @@ export const openApiDocument = {
                     contact_email: { type: "string" },
                     website: { type: "string" },
                     contact_aadhaar: { type: "string" },
-                    reg_certificate_files: { type: "array", items: { type: "string" } },
-                    org_photo_files: { type: "array", items: { type: "string" } },
+                    reg_certificate_files: {
+                        type: "array",
+                        items: { type: "string" },
+                        description:
+                            "Stored paths (`ngo/<id>/<file>`) served by `GET /api/files/{role}/{userId}/{filename}`. Not accepted in a request body.",
+                    },
+                    org_photo_files: {
+                        type: "array",
+                        items: { type: "string" },
+                        description: "Stored paths served by the file endpoint. Not accepted in a request body.",
+                    },
                 },
+            },
+            UploadedFile: {
+                type: "object",
+                description: "One uploaded document, ready to reference from a registration.",
+                properties: {
+                    ref: {
+                        type: "string",
+                        description:
+                            "`tmp/<name>`. Send this to the police or NGO registration as an `*_uploads` entry; it is moved into the member's folder only when the account is created.",
+                        example: "tmp/1f2e3d4c5b6a7f8e9d0c1b2a.png",
+                    },
+                    name: { type: "string", example: "id-card.png" },
+                    size: { type: "integer", example: 45827 },
+                    mime: { type: "string", example: "image/png" },
+                },
+            },
+            FileUploadResult: {
+                type: "object",
+                properties: {
+                    files: { type: "array", items: ref("UploadedFile") },
+                },
+            },
+            PoliceRegistrationInput: {
+                allOf: [
+                    ref("PoliceProfile"),
+                    {
+                        type: "object",
+                        required: [
+                            "rank",
+                            "badge_number",
+                            "station_name",
+                            "state",
+                            "official_email",
+                            "employee_id",
+                            "joining_date",
+                            "reporting_officer",
+                            "id_card_uploads",
+                        ],
+                        properties: {
+                            id_card_uploads: {
+                                type: "array",
+                                items: { type: "string" },
+                                minItems: 1,
+                                description:
+                                    "`tmp/*` references from `POST /api/files`. At least one is required - it is what the admin verifies the officer against.",
+                            },
+                            appointment_proof_uploads: {
+                                type: "array",
+                                items: { type: "string" },
+                                description:
+                                    "Optional `tmp/*` references from `POST /api/files`. The server-owned `id_card_files`/`appointment_proof_files` fields are ignored if sent.",
+                            },
+                        },
+                    },
+                ],
+            },
+            NgoRegistrationInput: {
+                allOf: [
+                    ref("NgoProfile"),
+                    {
+                        type: "object",
+                        required: ["org_name", "state", "contact_person", "contact_mobile"],
+                        properties: {
+                            reg_certificate_uploads: {
+                                type: "array",
+                                items: { type: "string" },
+                                description:
+                                    "Optional `tmp/*` references from `POST /api/files` - registration / 12A / 80G certificates.",
+                            },
+                            org_photo_uploads: {
+                                type: "array",
+                                items: { type: "string" },
+                                description:
+                                    "Optional `tmp/*` references from `POST /api/files` - an office or team photo. The server-owned `reg_certificate_files`/`org_photo_files` fields are ignored if sent.",
+                            },
+                        },
+                    },
+                ],
             },
             LoginResult: {
                 type: "object",
@@ -383,7 +481,11 @@ export const openApiDocument = {
                             reviewed_at: { type: "string", format: "date-time", nullable: true },
                             assigned_admin_id: { type: "string", nullable: true },
                             profile: {
-                                description: "The police or NGO record, depending on the role.",
+                                description: [
+                                    "The police or NGO record, depending on the role.",
+                                    "File path arrays are kept in `documents`, and the NGO contact",
+                                    "Aadhaar is masked - what stays here are the details themselves.",
+                                ].join(" "),
                                 oneOf: [ref("PoliceProfile"), ref("NgoProfile")],
                             },
                             verification_call: nullableRef("VerificationCall"),
@@ -732,9 +834,15 @@ export const openApiDocument = {
                     "are returned and the cookies set straight away, so the caller can",
                     "reach `GET /api/users/me` to read the status while waiting.",
                     "",
-                    "Every field of `police` is required, including `official_email` and",
-                    "at least one `id_card_files` photo - that photo is what the admin",
+                    "Every field of `police` except `district` and",
+                    "`reporting_officer_contact` is required, including `official_email` and",
+                    "at least one `id_card_uploads` entry - that photo is what the admin",
                     "verifies against, so the account cannot be created without one.",
+                    "",
+                    "Documents are uploaded first to `POST /api/files`, which returns",
+                    "`tmp/*` references; those references go into `*_uploads`, not",
+                    "base64. The stored paths the account carries are",
+                    "`id_card_files`/`appointment_proof_files`.",
                 ].join("\n"),
                 security: [],
                 requestBody: jsonBody({
@@ -747,7 +855,7 @@ export const openApiDocument = {
                         mobile: { type: "string", example: "9876543210" },
                         email: { type: "string", example: "suraj.up@gov.in" },
                         password: { type: "string", format: "password", minLength: 6 },
-                        police: ref("PoliceProfile"),
+                        police: ref("PoliceRegistrationInput"),
                     },
                 }),
                 responses: {
@@ -781,9 +889,16 @@ export const openApiDocument = {
                     "caller can reach `GET /api/users/me` to read the status while",
                     "waiting.",
                     "",
-                    "Every field of `ngo` is required. `contact_email` and",
-                    "`contact_aadhaar` are optional, but `contact_mobile` is how the",
-                    "admin reaches the organisation during the viva call.",
+                    "Only `org_name`, `state`, `contact_person` and `contact_mobile` are",
+                    "required - everything else in `ngo` is optional, so an organisation",
+                    "with a partial record can still register. `contact_mobile` is how the",
+                    "admin reaches the organisation during the viva call. `contact_email`",
+                    "and `contact_aadhaar` are optional for the profile itself, but the",
+                    "account's `email` is still required for login.",
+                    "",
+                    "Documents are uploaded first to `POST /api/files`, which returns",
+                    "`tmp/*` references; those references go into `*_uploads`. The stored",
+                    "paths the account carries are `reg_certificate_files`/`org_photo_files`.",
                 ].join("\n"),
                 security: [],
                 requestBody: jsonBody({
@@ -796,7 +911,7 @@ export const openApiDocument = {
                         mobile: { type: "string", example: "9876543210" },
                         email: { type: "string", example: "neha@bachpan.org" },
                         password: { type: "string", format: "password", minLength: 6 },
-                        ngo: ref("NgoProfile"),
+                        ngo: ref("NgoRegistrationInput"),
                     },
                 }),
                 responses: {
@@ -1377,6 +1492,101 @@ export const openApiDocument = {
                     403: failures.forbidden,
                     404: failures.notFound,
                     422: errorResponse("The reason is shorter than 10 characters."),
+                },
+            },
+        },
+        "/api/files": {
+            post: {
+                tags: ["Files"],
+                summary: "Upload registration documents",
+                description: [
+                    "Multipart form data, one or more parts named `files`. Open - no session",
+                    "required - because a police or NGO sign-up happens before the account",
+                    "exists, and the files cannot belong to an account that is not there yet.",
+                    "",
+                    "JPG, PNG, WEBP and PDF are accepted, each up to 2 MB, six files at",
+                    "most. The response carries `tmp/*` references: pass them into the",
+                    "police (`id_card_uploads`, `appointment_proof_uploads`) or NGO",
+                    "(`reg_certificate_uploads`, `org_photo_uploads`) registration body.",
+                    "Files only move out of `tmp/` into the member's folder once that",
+                    "registration succeeds.",
+                ].join("\n"),
+                security: [],
+                requestBody: {
+                    required: true,
+                    content: {
+                        "multipart/form-data": {
+                            schema: {
+                                type: "object",
+                                required: ["files"],
+                                properties: {
+                                    files: {
+                                        type: "array",
+                                        items: { type: "string", format: "binary" },
+                                        maxItems: 6,
+                                        description: "JPG, PNG, WEBP or PDF, up to 2 MB each.",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                responses: {
+                    200: ok(
+                        "Files uploaded. Carry the `ref`s into the registration body.",
+                        ref("FileUploadResult"),
+                        "Files uploaded.",
+                    ),
+                    400: errorResponse("The multipart body could not be read."),
+                    413: errorResponse("A file is larger than 2 MB."),
+                    422: errorResponse("No files, more than six files, or a type that is not JPG, PNG, WEBP or PDF."),
+                    503: failures.unavailable,
+                },
+            },
+        },
+        "/api/files/{role}/{userId}/{filename}": {
+            get: {
+                tags: ["Files"],
+                summary: "Download a stored document",
+                description: [
+                    "Serves the stored file itself (image or PDF, content type set from the",
+                    "extension), for inline viewing. This is the URL a verification record's",
+                    "`documents` and a profile's `*_files` arrays point at.",
+                    "",
+                    "Access: the account the folder belongs to, or an admin/superadmin. Nobody",
+                    "else can open it, and the path is checked so `..` cannot escape the",
+                    "folder. The file is never stored inline in the database, so this is the",
+                    "only way the frontend shows it.",
+                ].join("\n"),
+                parameters: [
+                    {
+                        name: "role",
+                        in: "path",
+                        required: true,
+                        schema: { type: "string", enum: ["public", "police", "ngo"] },
+                        description: "Which folder the file lives in.",
+                    },
+                    {
+                        name: "userId",
+                        in: "path",
+                        required: true,
+                        schema: { type: "string" },
+                        description: "The Mongo id of the account that owns the folder.",
+                    },
+                    {
+                        name: "filename",
+                        in: "path",
+                        required: true,
+                        schema: { type: "string" },
+                        description: "The stored file name. Only `[A-Za-z0-9._-]` characters are accepted.",
+                    },
+                ],
+                responses: {
+                    200: { description: "The file, with its content type set from the extension." },
+                    401: failures.unauthorized,
+                    403: errorResponse("Signed in, but the caller is neither the owner nor an admin."),
+                    404: failures.notFound,
+                    503: failures.unavailable,
                 },
             },
         },
