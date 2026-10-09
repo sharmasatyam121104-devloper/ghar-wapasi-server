@@ -2,7 +2,7 @@
  * The API contract, written out by hand in one file.
  *
  * Hand-written rather than generated from JSDoc annotations: the whole surface
- * is 28 paths and 30 operations, and keeping the spec in a single readable
+ * is 30 paths and 33 operations, and keeping the spec in a single readable
  * file makes it reviewable in the same diff as the routes it documents. Every
  * path here has a counterpart in the mounted routers; if they ever disagree,
  * the spec is wrong.
@@ -447,6 +447,51 @@ export const openApiDocument = {
                     timeline: { type: "array", items: ref("ComplaintEvent") },
                     created_at: { type: "string", format: "date-time" },
                     updated_at: { type: "string", format: "date-time" },
+                },
+            },
+            ComplaintSummary: {
+                type: "object",
+                description:
+                    "A report as anyone signed in reads it: the missing-person facts and the last-seen trail. The complainant's contact details, Aadhaar numbers, address and the uploaded ID/FIR documents are deliberately omitted.",
+                properties: {
+                    id: { type: "string" },
+                    case_ref: { type: "string", example: "GW-2026-0112" },
+                    status: { type: "string", enum: ["active", "matched", "resolved"] },
+                    created_by: { type: "string", description: "The filing account's Mongo id." },
+                    created_by_role: { type: "string", enum: ["public", "police", "ngo"] },
+
+                    person_name: { type: "string" },
+                    person_age: { type: "integer", example: 34 },
+                    person_gender: { type: "string" },
+                    person_height: { type: "string" },
+                    person_build: { type: "string" },
+                    person_marks: { type: "string" },
+                    person_clothing: { type: "string" },
+                    person_languages: { type: "string" },
+                    person_photos: { type: "array", items: { type: "string" } },
+
+                    last_seen_date: { type: "string", format: "date-time" },
+                    last_seen_time: { type: "string", example: "18:30" },
+                    last_seen_place: { type: "string" },
+                    last_seen_city: { type: "string" },
+                    last_seen_area: { type: "string" },
+                    circumstances: { type: "string" },
+
+                    fir_number: { type: "string" },
+                    has_fir_copy: { type: "boolean" },
+
+                    timeline: { type: "array", items: ref("ComplaintEvent") },
+                    created_at: { type: "string", format: "date-time" },
+                    updated_at: { type: "string", format: "date-time" },
+                },
+            },
+            ComplaintUpdate: {
+                type: "object",
+                description:
+                    "A partial update, available to the filing account only. Sending `status` records its own timeline entry; `timeline_event` appends one as given.",
+                properties: {
+                    status: { type: "string", enum: ["active", "matched", "resolved"] },
+                    timeline_event: ref("ComplaintEvent"),
                 },
             },
             ComplaintInput: {
@@ -1747,6 +1792,72 @@ export const openApiDocument = {
                 },
             },
         },
+        "/api/complaints": {
+            get: {
+                tags: ["Complaints"],
+                summary: "List missing-person reports",
+                description: [
+                    "Every lodged report, newest first, as public summaries - the same",
+                    "trimmed shape every signed-in account sees. Contact details, Aadhaar",
+                    "numbers and uploaded ID/FIR documents are never included here; open a",
+                    "single case to read those where you are entitled to.",
+                ].join("\n"),
+                responses: {
+                    200: ok("The reports, newest first.", {
+                        type: "object",
+                        properties: {
+                            complaints: { type: "array", items: ref("ComplaintSummary") },
+                        },
+                    }),
+                    401: failures.unauthorized,
+                    503: failures.unavailable,
+                },
+            },
+        },
+        "/api/complaints/{id}": {
+            parameters: [
+                {
+                    name: "id",
+                    in: "path",
+                    required: true,
+                    schema: { type: "string" },
+                    description: "The complaint's Mongo id.",
+                },
+            ],
+            get: {
+                tags: ["Complaints"],
+                summary: "Read one missing-person report",
+                description: [
+                    "Returns the full record when the caller filed the complaint or is the",
+                    "admin assigned to the account that filed it. Any other signed-in account",
+                    "(including a police or NGO officer who did not file it) gets the same",
+                    "public summary as the list.",
+                ].join("\n"),
+                responses: {
+                    200: ok("The report - full or summarised for this caller.", {
+                        oneOf: [ref("Complaint"), ref("ComplaintSummary")],
+                    }),
+                    401: failures.unauthorized,
+                    404: errorResponse("No complaint with that id."),
+                    503: failures.unavailable,
+                },
+            },
+            patch: {
+                tags: ["Complaints"],
+                summary: "Update a report you filed",
+                description:
+                    "Only the account that filed the complaint may change its `status` or append a `timeline_event`. A new status writes its own timeline entry.",
+                requestBody: jsonBody(ref("ComplaintUpdate")),
+                responses: {
+                    200: ok("Updated.", ref("Complaint"), "Complaint updated successfully."),
+                    401: failures.unauthorized,
+                    403: errorResponse("Signed in, but not as the account that filed this complaint."),
+                    404: errorResponse("No complaint with that id."),
+                    422: errorResponse("`status` is not valid, or a `timeline_event` field is missing."),
+                    503: failures.unavailable,
+                },
+            },
+        },
         "/api/complaints/public": {
             post: {
                 tags: ["Complaints"],
@@ -1780,13 +1891,14 @@ export const openApiDocument = {
                 description: [
                     "The police variant of `POST /api/complaints/public`. The report's",
                     "`created_by_role` is `police`, and the uploaded files land in the filing",
-                    "officer's own folder (`police/<id>/`).",
+                    "officer's own folder (`police/<id>/`). The officer's account must be",
+                    "admin-verified to file.",
                 ].join("\n"),
                 requestBody: jsonBody(ref("ComplaintInput")),
                 responses: {
                     201: ok("Report filed.", ref("Complaint"), "Complaint registered successfully."),
                     401: failures.unauthorized,
-                    403: errorResponse("Signed in, but not as a `police` account."),
+                    403: errorResponse("Signed in, but not as a verified `police` account."),
                     422: errorResponse(
                         "A required field is missing, an Aadhaar or mobile has the wrong length, or an uploaded file is no longer available.",
                     ),
@@ -1801,13 +1913,13 @@ export const openApiDocument = {
                 description: [
                     "The NGO variant of `POST /api/complaints/public`. The report's",
                     "`created_by_role` is `ngo`, and the uploaded files land in the filing",
-                    "member's own folder (`ngo/<id>/`).",
+                    "member's own folder (`ngo/<id>/`). The account must be verified first.",
                 ].join("\n"),
                 requestBody: jsonBody(ref("ComplaintInput")),
                 responses: {
                     201: ok("Report filed.", ref("Complaint"), "Complaint registered successfully."),
                     401: failures.unauthorized,
-                    403: errorResponse("Signed in, but not as an `ngo` account."),
+                    403: errorResponse("Signed in, but not as a verified `ngo` account."),
                     422: errorResponse(
                         "A required field is missing, an Aadhaar or mobile has the wrong length, or an uploaded file is no longer available.",
                     ),
