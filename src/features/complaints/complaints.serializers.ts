@@ -58,6 +58,83 @@ export interface PublicComplaint {
     updated_at?: Date;
 }
 
+/**
+ * The trimmed shape anyone signed in may read: the missing-person facts and the
+ * last-seen trail, but none of the complainant's contact details, Aadhaar
+ * numbers, addresses or uploaded ID/FIR documents. `person_photos` stays
+ * because a missing-person notice is useless without the photo.
+ */
+export interface ComplaintSummary {
+    id: string;
+    case_ref: string;
+    status: string;
+    created_by: string;
+    created_by_role: string;
+
+    person_name: string;
+    person_age: number;
+    person_gender: string;
+    person_height: string;
+    person_build: string;
+    person_marks: string;
+    person_clothing: string;
+    person_languages: string;
+    person_photos: string[];
+
+    last_seen_date: Date;
+    last_seen_time: string;
+    last_seen_place: string;
+    last_seen_city: string;
+    last_seen_area: string;
+    circumstances: string;
+
+    fir_number: string;
+    has_fir_copy: boolean;
+
+    timeline: { title: string; date: Date; detail: string; state: string }[];
+
+    created_at?: Date;
+    updated_at?: Date;
+}
+
+export const toComplaintSummary = (complaint: ComplaintDocument): ComplaintSummary => ({
+    id: String(complaint._id),
+    case_ref: complaint.case_ref ?? "",
+    status: complaint.status,
+    created_by: String(complaint.created_by),
+    created_by_role: complaint.created_by_role,
+
+    person_name: complaint.person_name,
+    person_age: complaint.person_age,
+    person_gender: complaint.person_gender,
+    person_height: complaint.person_height ?? "",
+    person_build: complaint.person_build ?? "",
+    person_marks: complaint.person_marks ?? "",
+    person_clothing: complaint.person_clothing ?? "",
+    person_languages: complaint.person_languages ?? "",
+    person_photos: complaint.person_photos ?? [],
+
+    last_seen_date: complaint.last_seen_date,
+    last_seen_time: complaint.last_seen_time ?? "",
+    last_seen_place: complaint.last_seen_place,
+    last_seen_city: complaint.last_seen_city,
+    last_seen_area: complaint.last_seen_area ?? "",
+    circumstances: complaint.circumstances ?? "",
+
+    fir_number: complaint.fir_number,
+    has_fir_copy: (complaint.fir_copy_files ?? []).length > 0,
+
+    timeline: (complaint.timeline ?? []).map((event) => ({
+        title: event.title,
+        date: event.date,
+        detail: event.detail,
+        state: event.state,
+    })),
+
+    created_at: complaint.created_at,
+    updated_at: complaint.updated_at,
+});
+
 export const toPublicComplaint = (complaint: ComplaintDocument): PublicComplaint => ({
     id: String(complaint._id),
     case_ref: complaint.case_ref ?? "",

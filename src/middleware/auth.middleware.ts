@@ -79,21 +79,26 @@ export const requireSuperAdmin = requireRole("superadmin");
 export const requireStaff = requireRole("police", "ngo");
 
 /**
- * Gate for the real police/NGO portal. An account that is still pending or
- * was rejected keeps a valid token - it just cannot open the portal.
+ * The verification check on its own, for routes that have already pinned the
+ * role. An account that is still pending or was rejected keeps a valid token -
+ * it just cannot open the portal.
  */
-export const requireVerifiedStaff = [
-    requireStaff,
-    (req: Request, _res: Response, next: NextFunction): void => {
-        if (req.user?.verification_status === "verified") return next();
-        next(
-            ApiError.forbidden(
-                req.user?.verification_status === "rejected"
-                    ? "Your registration was rejected. Please update and resubmit."
-                    : "Your account is still waiting for admin verification.",
-            ),
-        );
-    },
-] as const;
+export const requireVerified = (req: Request, _res: Response, next: NextFunction): void => {
+    if (req.user?.verification_status === "verified") return next();
+    next(
+        ApiError.forbidden(
+            req.user?.verification_status === "rejected"
+                ? "Your registration was rejected. Please update and resubmit."
+                : "Your account is still waiting for admin verification.",
+        ),
+    );
+};
+
+/** Gate for the real police/NGO portal. Must run after `requireAuth`. */
+export const requireVerifiedStaff = [requireStaff, requireVerified] as const;
+
+/** A single role that must also be verified, e.g. `requireVerifiedRole("police")`. */
+export const requireVerifiedRole = (...roles: UserRole[]) =>
+    [requireRole(...roles), requireVerified] as const;
 
 export type { UserDocument };

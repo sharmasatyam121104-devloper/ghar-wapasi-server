@@ -2,7 +2,9 @@ import { Types } from "mongoose";
 import { ApiError, type ErrorDetail } from "../../shared/errors/ApiError";
 import { assertNoFieldErrors, listOfStrings } from "../registration/registration.shared";
 import { assignUploadGroups, removeStoredFiles, type StorageRole } from "../files/file.storage";
+import { User, type UserDocument } from "../users/users.model";
 import { Complaint, type ComplaintDocument } from "./complaints.model";
+import type { CaseEvent, ComplaintStatus } from "./complaints.types";
 
 /**
  * Every role files a complaint the same way, so the validation and the write
@@ -213,3 +215,99 @@ export const registerPoliceComplaint = (userId: string, body: Record<string, unk
 
 export const registerNgoComplaint = (userId: string, body: Record<string, unknown>): Promise<ComplaintDocument> =>
     createComplaint("ngo", userId, body);
+
+/* ------------------------------------------------------------------ */
+/* Reading and updating                                                */
+/* ------------------------------------------------------------------ */
+
+/** Newest first - the dashboards all show the most recent case at the top. */
+export const listComplaints = (): Promise<ComplaintDocument[]> =>
+    Complaint.find().sort({ created_at: -1 }).exec();
+
+export const findComplaint = async (id: string): Promise<ComplaintDocument> => {
+    if (!Types.ObjectId.isValid(id)) throw ApiError.notFound("We could not find that complaint.");
+    const complaint = await Complaint.findById(id);
+    if (!complaint) throw ApiError.notFound("We could not find that complaint.");
+    return complaint;
+};
+
+/**
+ * Only the account that filed a complaint - and the admin assigned to verify
+ * that account - may open the full record. Everyone else, including a police or
+ * NGO officer who did not file it, reads the public summary. This is what keeps
+ * the complainant's contact details and ID documents off other portals.
+ */
+export const canViewComplaintInFull = async (
+    viewer: UserDocument,
+    complaint: ComplaintDocument,
+): Promise<boolean> => {
+    if (String(complaint.created_by) === String(viewer._id)) return true;
+    if (viewer.role !== "admin" && viewer.role !== "superadmin") return false;
+    return Boolean(await User.exists({ _id: complaint.created_by, assigned_admin_id: viewer._id }));
+};
+
+const STATUSES: readonly ComplaintStatus[] = ["active", "matched", "resolved"];
+
+const statusLabel: Record<ComplaintStatus, string> = {
+    active: "Case active",
+    matched: "Possible match reported",
+    resolved: "Case resolved",
+};
+
+/**
+ * The filer keeps ownership of their case: only they can move its status or add
+ * a timeline event. A status change writes its own event so the timeline always
+ * reflects the latest state without a second request.
+ */
+export const updateComplaint = async (
+    userId: string,
+    id: string,
+    body: Record<string, unknown>,
+): Promise<ComplaintDocument> => {
+    const complaint = await findComplaint(id);
+    if (String(complaint.created_by) !== userId) {
+        throw ApiError.forbidden("Only the person who filed this complaint can update it.");
+    }
+
+    const errors: ErrorDetail = {};
+    let status: ComplaintStatus | undefined;
+    if (body.status !== undefined) {
+        if (typeof body.status !== "string" || !STATUSES.includes(body.status as ComplaintStatus)) {
+            errors.status = "Choose a valid status.";
+        } else {
+            status = body.status as ComplaintStatus;
+        }
+    }
+
+    let event: CaseEvent | undefined;
+    if (body.timeline_event !== undefined && body.timeline_event !== null) {
+        const raw = body.timeline_event as Record<string, unknown>;
+        const title = trimTo(raw.title, 120);
+        const detail = trimTo(raw.detail, 1000);
+        const state = raw.state;
+        if (!title) errors["timeline_event.title"] = "This field is required.";
+        if (!detail) errors["timeline_event.detail"] = "This field is required.";
+        if (state !== "done" && state !== "current" && state !== "pending") {
+            errors["timeline_event.state"] = "Choose a valid state.";
+        }
+        if (!errors["timeline_event.title"] && !errors["timeline_event.detail"] && !errors["timeline_event.state"]) {
+            event = { title, detail, date: new Date(), state: state as CaseEvent["state"] };
+        }
+    }
+
+    assertNoFieldErrors(errors);
+
+    if (status && status !== complaint.status) {
+        complaint.status = status;
+        complaint.timeline.push({
+            title: statusLabel[status],
+            detail: "The complaint status was updated by the filer.",
+            date: new Date(),
+            state: status === "resolved" ? "done" : "current",
+        });
+    }
+    if (event) complaint.timeline.push(event);
+
+    await complaint.save();
+    return complaint;
+};

@@ -25,9 +25,12 @@ import complaintsRoutes from "../features/complaints/complaints.routes";
  *                      PATCH /me/ngo      re-queued for an admin review
  *   /api/verification  admin review queue
  *   /api/complaints    missing-person reports
- *                      POST /public  filed by a member
- *                      POST /police  filed by a police account
- *                      POST /ngo     filed by an NGO account
+ *                      GET  /              every case, as public summaries
+ *                      GET  /:id           full for the filer (and their admin)
+ *                      PATCH /:id          filer updates status / timeline
+ *                      POST /public        filed by a member
+ *                      POST /police        filed by a verified police account
+ *                      POST /ngo           filed by a verified NGO account
  */
 const ApiRouter = Router();
 
