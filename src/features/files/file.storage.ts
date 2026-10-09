@@ -117,6 +117,21 @@ export const deleteUserDirectory = (role: StorageRole, userId: string): void => 
     fs.rmSync(userDirectory(role, userId), { recursive: true, force: true });
 };
 
+/**
+ * Removes specific stored files - the counterpart to `assignUploadGroups` for a
+ * write that failed *after* the move. Unlike `deleteUserDirectory` this leaves
+ * the member's other documents alone, which matters when one folder holds the
+ * files of several records (a member's profile plus every complaint they filed).
+ */
+export const removeStoredFiles = (references: string[]): void => {
+    for (const reference of references) {
+        const parts = reference.split("/");
+        if (parts.length !== 3) continue;
+        const absolute = resolveStoredFile(parts[0], parts[1], parts[2]);
+        if (absolute) fs.rmSync(absolute, { force: true });
+    }
+};
+
 /** True for the `<role>/<userId>/<file>` paths this module stores. */
 export const isStoredFileReference = (reference: unknown): boolean => {
     if (typeof reference !== "string") return false;
