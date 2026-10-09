@@ -112,6 +112,12 @@ export const identityFields = (identity: NormalizedRegistration) => ({
     password: identity.password,
 });
 
+/** Keeps only the non-empty strings of an uploaded-file reference list. */
+export const listOfStrings = (value: unknown): string[] =>
+    Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        : [];
+
 /** Turns a filled-in `errors` object into the 422 the client expects. */
 export const assertNoFieldErrors = (errors: ErrorDetail): void => {
     if (Object.keys(errors).length > 0) {

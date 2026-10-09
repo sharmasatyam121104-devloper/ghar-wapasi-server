@@ -45,6 +45,9 @@ tmp/
 temp/
 .cache/
 
+# Member document uploads (disk, outside src)
+uploads/
+
 # Misc
 *.tgz
 

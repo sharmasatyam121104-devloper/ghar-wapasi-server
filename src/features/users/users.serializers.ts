@@ -61,6 +61,29 @@ export interface VerificationRecord extends PublicUser {
     } | null;
 }
 
+/**
+ * The profile as the admin reads it. Raw file paths are split out into
+ * `documents`, and the NGO contact Aadhaar is masked - what stays here are the
+ * service/organisation details themselves.
+ */
+const reviewProfile = (user: UserDocument): PoliceProfile | NgoProfile | undefined => {
+    if (user.role === "police") {
+        const police = plain<PoliceProfile>(user.police);
+        if (!police) return undefined;
+        const { id_card_files: _idCardFiles, appointment_proof_files: _appointmentProofFiles, ...rest } = police;
+        return rest;
+    }
+
+    if (user.role === "ngo") {
+        const ngo = plain<NgoProfile>(user.ngo);
+        if (!ngo) return undefined;
+        const { reg_certificate_files: _certificateFiles, org_photo_files: _orgPhotoFiles, contact_aadhaar, ...rest } = ngo;
+        return contact_aadhaar ? { ...rest, contact_aadhaar: maskAadhaar(contact_aadhaar) } : rest;
+    }
+
+    return undefined;
+};
+
 /** The staff-facing detail view - what an admin checks the documents against. */
 export const toVerificationRecord = (user: UserDocument): VerificationRecord => {
     const isPolice = user.role === "police";
@@ -93,11 +116,7 @@ export const toVerificationRecord = (user: UserDocument): VerificationRecord => 
         rejection_reason: user.rejection_reason,
         reviewed_at: user.reviewed_at,
         assigned_admin_id: user.assigned_admin_id ? String(user.assigned_admin_id) : null,
-        profile: isPolice
-            ? (plain<PoliceProfile>(user.police) ?? undefined)
-            : isNgo
-              ? (plain<NgoProfile>(user.ngo) ?? undefined)
-              : undefined,
+        profile: reviewProfile(user),
         pending_contact: user.pending_contact
             ? {
                   email: user.pending_contact.email,

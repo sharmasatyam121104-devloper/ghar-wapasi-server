@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authRoutes from "../features/auth/auth.routes";
+import filesRoutes from "../features/files/files.routes";
 import otpRoutes from "../features/otp/otp.routes";
 import registrationRoutes from "../features/registration/registration.routes";
 import usersRoutes from "../features/users/users.routes";
@@ -11,6 +12,9 @@ import verificationRoutes from "../features/verification/verification.routes";
  *
  *   /api/auth          login, refresh, forgot-password, logout, password
  *   /api/register      public / police / ngo sign-up, superadmin-only admin
+ *   /api/files         document uploads + delivery
+ *                      POST                        multipart -> tmp references
+ *                      GET /:role/:userId/:file    admin or the owner only
  *   /api/otp           centralized codes for contact changes
  *                      POST /request  purpose + channel + target -> code sent
  *                      POST /verify   challenge_id + code       -> one-use receipt
@@ -23,6 +27,7 @@ import verificationRoutes from "../features/verification/verification.routes";
 const ApiRouter = Router();
 
 ApiRouter.use("/auth", authRoutes);
+ApiRouter.use("/files", filesRoutes);
 ApiRouter.use("/otp", otpRoutes);
 ApiRouter.use("/register", registrationRoutes);
 ApiRouter.use("/users", usersRoutes);
