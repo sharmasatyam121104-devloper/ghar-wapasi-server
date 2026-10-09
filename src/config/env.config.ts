@@ -1,3 +1,5 @@
+import path from "node:path";
+
 const read = (name: string, fallback: string): string => {
     const value = process.env[name];
     return value && value.trim() ? value : fallback;
@@ -9,6 +11,13 @@ export const env = {
     clientUrl: read("CLIENT_URL", "http://localhost:5173"),
     dbUrl: read("DB_URL", ""),
     dbName: read("DB_NAME", ""),
+    /**
+     * Where uploaded documents live, outside `src`. Files are grouped as
+     * `uploads/<role>/<userId>/`; `tmp/` holds a fresh upload until the
+     * registration that references it succeeds. Overridable for tests and
+     * deployments that mount a volume elsewhere.
+     */
+    uploadsDir: path.resolve(process.cwd(), read("UPLOADS_DIR", "uploads")),
     /**
      * OTP policy. Overridable so the limits can be tuned without a code change
      * and so a test run can shorten the resend cooldown instead of sleeping a

@@ -1,29 +1,39 @@
+import { Types } from "mongoose";
 import type { ErrorDetail } from "../../shared/errors/ApiError";
 import { isEmail } from "../../shared/validators/validators";
-import { User } from "../users/users.model";
+import { assignUploadGroups, deleteUserDirectory } from "../files/file.storage";
+import { User, type UserDocument } from "../users/users.model";
 import { toPublicUser } from "../users/users.serializers";
 import type { PoliceProfile } from "../users/users.types";
 import {
     assertIdentifiersAreFree,
     assertNoFieldErrors,
     identityFields,
+    listOfStrings,
     openSession,
     pickAdminForMember,
     validateIdentity,
     type RegisterResult,
 } from "./registration.shared";
 
+/** The service record plus the `tmp/*` photo references that become its files. */
+interface PoliceProfileInput {
+    profile: PoliceProfile;
+    idCardUploads: string[];
+    appointmentUploads: string[];
+}
+
 /**
  * An officer's service record plus at least one ID card photo to verify.
  * Fills `errors` in place; a non-empty object means the sign-up is rejected.
  */
-const validatePoliceProfile = (police: unknown, errors: ErrorDetail): PoliceProfile => {
+const validatePoliceProfile = (police: unknown, errors: ErrorDetail): PoliceProfileInput => {
     if (!police || typeof police !== "object") {
         errors.police = "Police service details are required.";
-        return {};
+        return { profile: {}, idCardUploads: [], appointmentUploads: [] };
     }
 
-    const profile = police as PoliceProfile;
+    const input = police as Record<string, unknown>;
     const required: Array<[keyof PoliceProfile, string]> = [
         ["rank", "Rank is required."],
         ["badge_number", "Badge number is required."],
@@ -35,20 +45,29 @@ const validatePoliceProfile = (police: unknown, errors: ErrorDetail): PoliceProf
     ];
 
     for (const [field, message] of required) {
-        if (!profile[field]) errors[`police.${String(field)}`] = message;
+        if (!input[field]) errors[`police.${String(field)}`] = message;
     }
 
-    if (!profile.official_email) {
+    const officialEmail = typeof input.official_email === "string" ? input.official_email : "";
+    if (!officialEmail) {
         errors["police.official_email"] = "Official email is required.";
-    } else if (!isEmail(profile.official_email)) {
+    } else if (!isEmail(officialEmail)) {
         errors["police.official_email"] = "Enter a valid official email address.";
     }
 
-    if (!profile.id_card_files?.length) {
+    const idCardUploads = listOfStrings(input.id_card_uploads);
+    if (idCardUploads.length === 0) {
         errors["police.id_card_files"] = "At least one ID card photo is required.";
     }
 
-    return profile;
+    // Upload references are transport, not record: keep them out of the profile.
+    const { id_card_uploads: _idCard, appointment_proof_uploads: _appointment, ...profile } = input;
+
+    return {
+        profile: profile as PoliceProfile,
+        idCardUploads,
+        appointmentUploads: listOfStrings(input.appointment_proof_uploads),
+    };
 };
 
 /**
@@ -67,19 +86,39 @@ export const registerPolice = async (body: Record<string, unknown>): Promise<Reg
         },
         errors,
     );
-    const police = validatePoliceProfile(body.police, errors);
+    const { profile, idCardUploads, appointmentUploads } = validatePoliceProfile(body.police, errors);
     assertNoFieldErrors(errors);
 
     await assertIdentifiersAreFree(identity.aadhaar, identity.mobile, identity.email);
 
-    const assignedAdminId = await pickAdminForMember(police.state);
+    const assignedAdminId = await pickAdminForMember(profile.state);
 
-    const user = await User.create({
-        ...identityFields(identity),
-        role: "police",
-        assigned_admin_id: assignedAdminId,
-        police,
+    // The member id is minted first so the files have a folder to move into.
+    // `assignUploadGroups` cleans up after itself on failure; the user write
+    // gets the same treatment so a rejected sign-up leaves nothing on disk.
+    const userId = new Types.ObjectId();
+    const stored = await assignUploadGroups("police", String(userId), {
+        id_card_files: idCardUploads,
+        appointment_proof_files: appointmentUploads,
     });
+
+    let user: UserDocument;
+    try {
+        user = await User.create({
+            _id: userId,
+            ...identityFields(identity),
+            role: "police",
+            assigned_admin_id: assignedAdminId,
+            police: {
+                ...profile,
+                id_card_files: stored.id_card_files,
+                appointment_proof_files: stored.appointment_proof_files,
+            },
+        });
+    } catch (error) {
+        deleteUserDirectory("police", String(userId));
+        throw error;
+    }
 
     const tokens = await openSession(user);
 

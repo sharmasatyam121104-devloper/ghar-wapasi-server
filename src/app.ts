@@ -5,11 +5,14 @@ import { isDatabaseReady } from "./config/db.config";
 import { env } from "./config/env.config";
 import { mountDocs } from "./docs/swagger";
 import { requireDatabase } from "./middleware/database.middleware";
+import { ensureUploadDirectories } from "./features/files/file.storage";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
 import apiRoutes from "./routes";
 
 /** Builds the Express app without starting a server, so it stays testable. */
 export const createApp = (): Express => {
+    ensureUploadDirectories();
+
     const app = express();
 
     app.use(
