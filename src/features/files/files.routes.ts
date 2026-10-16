@@ -23,7 +23,9 @@ const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp", "applicat
 
 const storage = multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, tmpDirectory()),
-    filename: (_req, file, cb) => cb(null, newTmpFileName(file.originalname)),
+    // No extension yet: the file is written under a bare random name and gets
+    // its extension in the controller, once its bytes have been sniffed.
+    filename: (_req, _file, cb) => cb(null, newTmpFileName("")),
 });
 
 const upload = multer({

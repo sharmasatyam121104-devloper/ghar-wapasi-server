@@ -86,17 +86,3 @@ Raw spec: `http://localhost:8080/docs/openapi.json`
 The spec is hand-written in `src/docs/openapi.ts` and covers the full surface -
 23 paths, 25 operations - including which cookie or header authenticates each
 one and the `503` every `/api` route returns when Mongo is unreachable.
-
-## Tests
-
-There is no test runner here, so the checks are plain scripts that boot the real
-app against the real database. They add users, and they run one at a time.
-
-```
-npm test
-```
-
-That runs all six suites and prints a combined tally. Each suite needs its own
-environment, which `tests/run-all.mjs` sets per file - the rate-limit suite
-asserts the shipped default of 5 codes an hour and so must not have that limit
-raised, while the main OTP suite spends far more than five codes on one account.

@@ -32,11 +32,25 @@ export const ensureUploadDirectories = (): void => {
 
 export const tmpDirectory = (): string => path.join(env.uploadsDir, "tmp");
 
-/** `<random>.<ext>` written by multer; the client only ever sees `tmp/<name>`. */
-export const newTmpFileName = (originalName: string): string => {
-    const extension = path.extname(originalName).toLowerCase().slice(0, 10);
-    return `${randomBytes(12).toString("hex")}${extension}`;
+/**
+ * The only file types this server stores, keyed by the MIME type sniffed from
+ * the file's own bytes (`file-type`), never from what the client claimed. The
+ * extension is taken from here too, so a client-supplied name can never decide
+ * what a stored file is called.
+ */
+export const EXTENSION_BY_MIME: Record<string, string> = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
 };
+
+/**
+ * `<random><ext>` waiting in `tmp/`; the client only ever sees `tmp/<name>`.
+ * `extension` is the one this module derived from the sniffed MIME type.
+ */
+export const newTmpFileName = (extension: string): string =>
+    `${randomBytes(12).toString("hex")}${extension}`;
 
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 const TMP_REFERENCE = /^tmp\/([A-Za-z0-9._-]+)$/;
