@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import multer from "multer";
 import { ApiError } from "../../shared/errors/ApiError";
 import { requireAuth } from "../../middleware/auth.middleware";
+import { criticalFileLimiter } from "../../middleware/rateLimit.middleware";
 import { newTmpFileName, tmpDirectory } from "./file.storage";
 import * as controller from "./files.controller";
 
@@ -55,7 +56,7 @@ const toUploadError = (error: unknown): ApiError => {
 
 const FilesRouter = Router();
 
-FilesRouter.post("/", (req: Request, res: Response, next: NextFunction) => {
+FilesRouter.post("/", criticalFileLimiter, (req: Request, res: Response, next: NextFunction) => {
     upload.array("files", MAX_FILES)(req, res, (error: unknown) => {
         if (error) return next(toUploadError(error));
         controller.uploadFiles(req, res, next);
