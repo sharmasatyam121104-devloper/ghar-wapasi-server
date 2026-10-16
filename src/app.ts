@@ -7,6 +7,7 @@ import { mountDocs } from "./docs/swagger";
 import { requireDatabase } from "./middleware/database.middleware";
 import { ensureUploadDirectories } from "./features/files/file.storage";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
+import { globalLimiter } from "./middleware/rateLimit.middleware";
 import apiRoutes from "./routes";
 
 /** Builds the Express app without starting a server, so it stays testable. */
@@ -15,12 +16,22 @@ export const createApp = (): Express => {
 
     const app = express();
 
+    // Behind a reverse proxy in production so `req.ip` (and therefore rate
+    // limiting) is the real client instead of the proxy. Left off locally:
+    // trusting `X-Forwarded-For` when nothing sits in front lets any caller
+    // forge the header and walk around the limiter.
+    if (env.isProduction) app.set("trust proxy", 1);
+
     app.use(
         cors({
             origin: [env.clientUrl, "http://localhost:3000"],
             credentials: true,
         }),
     );
+
+    // Outer rate limit for the whole API, before anything reads the body.
+    // `/health` and the docs are outside `/api`, so neither is affected.
+    app.use("/api", globalLimiter);
 
     app.use(morgan("dev"));
     app.use(express.json({ limit: "2mb" }));

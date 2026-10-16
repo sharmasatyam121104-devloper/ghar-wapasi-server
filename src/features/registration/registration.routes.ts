@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as controller from "./registration.controller";
 import { requireAuth, requireSuperAdmin } from "../../middleware/auth.middleware";
+import { authLimiter } from "../../middleware/rateLimit.middleware";
 
 /**
  * One endpoint per role instead of one endpoint with a `role` field. The role
@@ -24,7 +25,7 @@ import { requireAuth, requireSuperAdmin } from "../../middleware/auth.middleware
 const RegistrationRouter = Router();
 
 RegistrationRouter.post("/", controller.registerPublic);
-RegistrationRouter.post("/police", controller.registerPolice);
+RegistrationRouter.post("/police", authLimiter, controller.registerPolice);
 RegistrationRouter.post("/ngo", controller.registerNgo);
 RegistrationRouter.post("/admin", requireAuth, requireSuperAdmin, controller.registerAdmin);
 

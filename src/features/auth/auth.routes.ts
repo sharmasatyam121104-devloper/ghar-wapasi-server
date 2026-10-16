@@ -1,11 +1,12 @@
 import { Router } from "express";
 import * as controller from "./auth.controller";
 import { requireAuth } from "../../middleware/auth.middleware";
+import { authLimiter } from "../../middleware/rateLimit.middleware";
 
 const AuthRouter = Router();
 
 /* Public --------------------------------------------------------- */
-AuthRouter.post("/login", controller.login);
+AuthRouter.post("/login", authLimiter, controller.login);
 AuthRouter.post("/refresh", controller.refresh);
 AuthRouter.post("/forgot-password", controller.forgotPassword);
 // No `requireAuth`: an expired access token must not trap the user in a
