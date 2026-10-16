@@ -86,6 +86,7 @@ export const login = async (identifier: unknown, password: unknown): Promise<Log
     }
 
     const user = await User.findOne(query).select("+password");
+    
     if (!user) {
         // Identical message for unknown user and wrong password, so the
         // endpoint cannot be used to enumerate registered accounts.

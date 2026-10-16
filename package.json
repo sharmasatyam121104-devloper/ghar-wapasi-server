@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node tests/run-all.mjs",
+    "superadmin": "tsx src/scripts/create-superadmin.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],
@@ -19,6 +19,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "file-type": "^22.2.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.1",
     "morgan": "^1.12.1",
