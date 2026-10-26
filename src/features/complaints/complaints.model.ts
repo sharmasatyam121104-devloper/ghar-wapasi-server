@@ -13,6 +13,17 @@ const caseEventSchema = new Schema(
   { _id: false }
 );
 
+const caseNoteSchema = new Schema(
+  {
+    author_id: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    author_name: { type: String, required: true, trim: true },
+    author_role: { type: String, required: true, trim: true },
+    body: { type: String, required: true, trim: true, maxlength: 1000 },
+    created_at: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 const complaintSchema = new Schema<ComplaintInterface>(
   {
     person_name: { type: String, required: true, trim: true },
@@ -56,14 +67,27 @@ const complaintSchema = new Schema<ComplaintInterface>(
     created_by: { type: Schema.Types.ObjectId, ref: "User", required: true },
     created_by_role: { type: String, enum: ["public", "police", "ngo"], required: true },
 
+    assigned_officer_id: { type: Schema.Types.ObjectId, ref: "User" },
+    assigned_officer_role: { type: String, enum: ["police", "ngo"] },
+    assigned_admin_id: { type: Schema.Types.ObjectId, ref: "User" },
+    assigned_at: { type: Date },
+    assigned_by: { type: Schema.Types.ObjectId, ref: "User" },
+
     status: { type: String, enum: ["active", "matched", "resolved"], default: "active" },
+    outcome: { type: String, enum: ["ongoing", "found", "not_found"], default: "ongoing" },
     case_ref: { type: String, trim: true, unique: true, sparse: true },
 
     timeline: { type: [caseEventSchema], default: [] },
+    notes: { type: [caseNoteSchema], default: [] },
   },
   {
     timestamps: { createdAt: "created_at", updatedAt: "updated_at" },
   }
 );
+
+complaintSchema.index({ created_by: 1, created_at: -1 });
+complaintSchema.index({ assigned_officer_id: 1, updated_at: -1 });
+complaintSchema.index({ assigned_admin_id: 1, updated_at: -1 });
+complaintSchema.index({ status: 1, created_at: -1 });
 
 export const Complaint: Model<ComplaintInterface> = model<ComplaintInterface>("Complaint", complaintSchema);

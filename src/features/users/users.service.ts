@@ -27,6 +27,27 @@ export const getById = async (id: string): Promise<UserDocument> => {
 };
 
 /**
+ * Account reads are never global. A superadmin may read only its own account,
+ * and an ordinary admin only itself plus the staff assigned to it. Broader
+ * operational access still comes from the feature-specific admin endpoints;
+ * this generic account lookup is not a directory.
+ */
+export const canAdminAccessUser = (viewer: UserDocument, target: UserDocument): boolean => {
+    const isSelf = String(target._id) === String(viewer._id);
+    if (viewer.role === "superadmin") return isSelf;
+    if (viewer.role !== "admin") return false;
+    return isSelf || String(target.assigned_admin_id) === String(viewer._id);
+};
+
+export const getScopedUser = async (viewer: UserDocument, id: string): Promise<UserDocument> => {
+    const user = await getById(id);
+    if (!canAdminAccessUser(viewer, user)) {
+        throw ApiError.notFound("That account could not be found.");
+    }
+    return user;
+};
+
+/**
  * The caller's own view of themselves. Police and NGO accounts additionally
  * get their review state plus `can_edit`, which drives the frontend's
  * "you may still fix your details" countdown.
@@ -496,22 +517,37 @@ export const updateNgoProfile = async (user: UserDocument, body: Record<string, 
 /* Listing                                                             */
 /* ------------------------------------------------------------------ */
 
-export const listUsers = async (query: ListQuery = {}): Promise<ListResult<PublicUser>> => {
+export const listUsers = async (
+    viewer: UserDocument,
+    query: ListQuery = {},
+): Promise<ListResult<PublicUser>> => {
     const filter: QueryFilter<UserInterface> = {};
+    const constraints: QueryFilter<UserInterface>[] = [];
 
     if (query.role && USER_ROLES.includes(query.role)) filter.role = query.role;
     if (query.verificationStatus) filter.verification_status = query.verificationStatus;
 
+    if (viewer.role === "superadmin") {
+        // A superadmin gets no global account directory, only its own record.
+        constraints.push({ _id: viewer._id });
+    } else if (viewer.role === "admin") {
+        constraints.push({ $or: [{ assigned_admin_id: viewer._id }, { _id: viewer._id }] });
+    }
+
     if (query.search?.trim()) {
         const safe = escapeRegex(query.search.trim());
-        filter.$or = [
-            { first_name: new RegExp(safe, "i") },
-            { last_name: new RegExp(safe, "i") },
-            { email: new RegExp(safe, "i") },
-            { mobile: new RegExp(safe, "i") },
-            { aadhaar: new RegExp(safe, "i") },
-        ];
+        constraints.push({
+            $or: [
+                { first_name: new RegExp(safe, "i") },
+                { last_name: new RegExp(safe, "i") },
+                { email: new RegExp(safe, "i") },
+                { mobile: new RegExp(safe, "i") },
+                { aadhaar: new RegExp(safe, "i") },
+            ],
+        });
     }
+
+    if (constraints.length > 0) filter.$and = constraints;
 
     const { page, limit } = resolvePaging(query);
 

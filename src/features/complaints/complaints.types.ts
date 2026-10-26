@@ -1,12 +1,22 @@
 import type { Types } from "mongoose";
 
 export type ComplaintStatus = "active" | "matched" | "resolved";
+export type CaseOutcome = "ongoing" | "found" | "not_found";
 
 export interface CaseEvent {
   title: string;
   date: Date;
   detail: string;
   state: "done" | "current" | "pending";
+}
+
+export interface CaseNote {
+  _id: Types.ObjectId;
+  author_id: Types.ObjectId;
+  author_name: string;
+  author_role: string;
+  body: string;
+  created_at: Date;
 }
 
 export interface ComplaintInterface {
@@ -53,10 +63,18 @@ export interface ComplaintInterface {
   created_by: Types.ObjectId;
   created_by_role: "public" | "police" | "ngo";
 
+  assigned_officer_id?: Types.ObjectId;
+  assigned_officer_role?: "police" | "ngo";
+  assigned_admin_id?: Types.ObjectId;
+  assigned_at?: Date;
+  assigned_by?: Types.ObjectId;
+
   status: ComplaintStatus;
+  outcome: CaseOutcome;
   case_ref?: string;
 
   timeline: CaseEvent[];
+  notes: CaseNote[];
 
   created_at: Date;
   updated_at: Date;

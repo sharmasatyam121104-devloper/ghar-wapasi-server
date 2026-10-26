@@ -18,6 +18,7 @@ import {
 } from "../../shared/validators/validators";
 import { User } from "../users/users.model";
 import { toPublicUser } from "../users/users.serializers";
+import { releaseExpiredSuspensionForUser } from "../admin/suspension.service";
 import type { PublicUser, UserInterface } from "../users/users.types";
 
 export interface LoginResult {
@@ -98,8 +99,8 @@ export const login = async (identifier: unknown, password: unknown): Promise<Log
         throw ApiError.unauthorized("Email or password is incorrect.");
     }
 
-    if (!user.is_active) {
-        throw ApiError.forbidden("This account has been deactivated. Contact the admin.");
+    if (!user.is_active && !(await releaseExpiredSuspensionForUser(user))) {
+        throw ApiError.forbidden("This account is suspended. Contact the admin.");
     }
 
     const tokens = issueTokens({ _id: String(user._id), role: user.role, email: user.email });
@@ -142,8 +143,8 @@ export const refresh = async (refreshToken: string | null): Promise<AuthTokens> 
         throw ApiError.unauthorized("Your session has been revoked. Please log in again.");
     }
 
-    if (!user.is_active) {
-        throw ApiError.forbidden("This account has been deactivated.");
+    if (!user.is_active && !(await releaseExpiredSuspensionForUser(user))) {
+        throw ApiError.forbidden("This account is suspended.");
     }
 
     const tokens = issueTokens({ _id: String(user._id), role: user.role, email: user.email });
@@ -175,20 +176,15 @@ export const logout = async (refreshToken: string | null): Promise<void> => {
 };
 
 /**
- * Deliberately vague and always successful. A reset flow that reports
- * "account not found" lets anyone enumerate registered users.
+ * Self-service reset is not implemented yet. The endpoint stays honest: it
+ * validates the identifier, tells the caller to contact an administrator, and
+ * never pretends a link was sent. No account lookup is needed, so this cannot
+ * be used to enumerate registered users.
  */
 export const requestPasswordReset = async (identifier: unknown): Promise<{ message: string }> => {
-    const query = identifierQuery(identifier);
-
-    const user = await User.findOne(query)
-        .select("email")
-        .lean();
-
-    if (user) {
-        // TODO: send a real reset link or OTP here. Never log the token itself.
-        console.log(`[auth] password reset requested for ${user.email}`);
-    }
-
-    return { message: "If that account exists, a reset link has been sent." };
+    identifierQuery(identifier);
+    return {
+        message:
+            "Password reset is not automated yet. Please contact an administrator with your registered email, mobile number or Aadhaar number.",
+    };
 };

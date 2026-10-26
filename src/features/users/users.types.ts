@@ -112,6 +112,7 @@ export interface PublicUser {
     aadhaar_masked: string;
     mobile: string;
     adminId: string;
+    is_superadmin: boolean;
     verification_status: VerificationStatus;
     is_active: boolean;
 }

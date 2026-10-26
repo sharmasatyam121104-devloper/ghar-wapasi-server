@@ -1,10 +1,12 @@
-import { Types } from "mongoose";
+import { Types, type QueryFilter } from "mongoose";
 import { ApiError, type ErrorDetail } from "../../shared/errors/ApiError";
 import { assertNoFieldErrors, listOfStrings } from "../registration/registration.shared";
 import { assignUploadGroups, removeStoredFiles, type StorageRole } from "../files/file.storage";
 import { User, type UserDocument } from "../users/users.model";
+import { recordAudit } from "../audit/audit.service";
 import { Complaint, type ComplaintDocument } from "./complaints.model";
-import type { CaseEvent, ComplaintStatus } from "./complaints.types";
+import type { CaseEvent, CaseOutcome, ComplaintStatus, ComplaintInterface } from "./complaints.types";
+import { resolvePaging } from "../../shared/http/pagination";
 
 /**
  * Every role files a complaint the same way, so the validation and the write
@@ -220,9 +222,75 @@ export const registerNgoComplaint = (userId: string, body: Record<string, unknow
 /* Reading and updating                                                */
 /* ------------------------------------------------------------------ */
 
+export interface ComplaintListQuery {
+    page?: number;
+    limit?: number;
+    status?: string;
+    mine?: boolean;
+}
+
+export interface ComplaintListResult {
+    complaints: ComplaintDocument[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+}
+
+const STATUSES: readonly ComplaintStatus[] = ["active", "matched", "resolved"];
+const OUTCOMES: readonly CaseOutcome[] = ["ongoing", "found", "not_found"];
+
+/**
+ * Admins only work on their own slice: users assigned to them, cases they
+ * own, and officers who report to them. Superadmins see everything. Public
+ * accounts are always narrowed to their own filings.
+ */
+export const complaintScopeFilter = async (viewer: UserDocument): Promise<QueryFilter<ComplaintInterface>> => {
+    if (viewer.role === "superadmin") return {};
+    if (viewer.role === "public") return { created_by: viewer._id };
+
+    if (viewer.role === "admin") {
+        const assignedUsers = await User.find({ assigned_admin_id: viewer._id }).select("_id").lean();
+        const ids = assignedUsers.map((user) => user._id);
+        return {
+            $or: [
+                { assigned_admin_id: viewer._id },
+                { created_by: { $in: ids } },
+                { assigned_officer_id: { $in: ids } },
+            ],
+        };
+    }
+
+    // Police and NGO accounts read the registry summaries. Full access is
+    // decided per record by `canViewComplaintInFull`.
+    return {};
+};
+
 /** Newest first - the dashboards all show the most recent case at the top. */
-export const listComplaints = (): Promise<ComplaintDocument[]> =>
-    Complaint.find().sort({ created_at: -1 }).exec();
+export const listComplaints = async (
+    viewer: UserDocument,
+    query: ComplaintListQuery = {},
+): Promise<ComplaintListResult> => {
+    if (viewer.role === "police" || viewer.role === "ngo") {
+        if (viewer.verification_status !== "verified") {
+            throw ApiError.forbidden("Your account must be verified before you can browse cases.");
+        }
+    }
+
+    const filter: QueryFilter<ComplaintInterface> = await complaintScopeFilter(viewer);
+    if (query.mine) filter.created_by = viewer._id;
+    if (query.status && STATUSES.includes(query.status as ComplaintStatus)) {
+        filter.status = query.status as ComplaintStatus;
+    }
+
+    const { page, limit } = resolvePaging({ page: query.page, limit: query.limit });
+    const [complaints, total] = await Promise.all([
+        Complaint.find(filter).sort({ created_at: -1 }).skip((page - 1) * limit).limit(limit),
+        Complaint.countDocuments(filter),
+    ]);
+
+    return { complaints, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+};
 
 export const findComplaint = async (id: string): Promise<ComplaintDocument> => {
     if (!Types.ObjectId.isValid(id)) throw ApiError.notFound("We could not find that complaint.");
@@ -232,21 +300,47 @@ export const findComplaint = async (id: string): Promise<ComplaintDocument> => {
 };
 
 /**
- * Only the account that filed a complaint - and the admin assigned to verify
- * that account - may open the full record. Everyone else, including a police or
- * NGO officer who did not file it, reads the public summary. This is what keeps
- * the complainant's contact details and ID documents off other portals.
+ * Only the filer, an assigned officer, an admin responsible for the filer or
+ * officer, and a superadmin may open the full record. Everyone else sees the
+ * public summary - or, for admins outside the case, nothing at all.
  */
 export const canViewComplaintInFull = async (
     viewer: UserDocument,
     complaint: ComplaintDocument,
 ): Promise<boolean> => {
+    if (
+        (viewer.role === "police" || viewer.role === "ngo") &&
+        viewer.verification_status !== "verified"
+    ) {
+        return false;
+    }
+    if (viewer.role === "superadmin") return true;
     if (String(complaint.created_by) === String(viewer._id)) return true;
-    if (viewer.role !== "admin" && viewer.role !== "superadmin") return false;
-    return Boolean(await User.exists({ _id: complaint.created_by, assigned_admin_id: viewer._id }));
+    if (complaint.assigned_officer_id && String(complaint.assigned_officer_id) === String(viewer._id)) return true;
+    if (complaint.assigned_admin_id && String(complaint.assigned_admin_id) === String(viewer._id)) return true;
+
+    if (viewer.role !== "admin") return false;
+    if (await User.exists({ _id: complaint.created_by, assigned_admin_id: viewer._id })) return true;
+    return Boolean(
+        complaint.assigned_officer_id &&
+            (await User.exists({ _id: complaint.assigned_officer_id, assigned_admin_id: viewer._id })),
+    );
 };
 
-const STATUSES: readonly ComplaintStatus[] = ["active", "matched", "resolved"];
+/** Whether the viewer may see even the public summary of this case. */
+export const canReadComplaint = async (
+    viewer: UserDocument,
+    complaint: ComplaintDocument,
+): Promise<boolean> => {
+    if (await canViewComplaintInFull(viewer, complaint)) return true;
+    if (viewer.role === "police" || viewer.role === "ngo") {
+        return viewer.verification_status === "verified";
+    }
+    return false;
+};
+
+const actorLabel = (viewer: UserDocument): string =>
+    `${viewer.first_name} ${viewer.last_name}`.trim() || viewer.role;
 
 const statusLabel: Record<ComplaintStatus, string> = {
     active: "Case active",
@@ -255,27 +349,36 @@ const statusLabel: Record<ComplaintStatus, string> = {
 };
 
 /**
- * The filer keeps ownership of their case: only they can move its status or add
- * a timeline event. A status change writes its own event so the timeline always
- * reflects the latest state without a second request.
+ * The filer, the assigned officer, the responsible admin and a superadmin may
+ * move a case's status or add a timeline event. A status change writes its own
+ * event so the timeline always reflects the latest state.
  */
 export const updateComplaint = async (
-    userId: string,
+    viewer: UserDocument,
     id: string,
     body: Record<string, unknown>,
 ): Promise<ComplaintDocument> => {
     const complaint = await findComplaint(id);
-    if (String(complaint.created_by) !== userId) {
-        throw ApiError.forbidden("Only the person who filed this complaint can update it.");
+    if (!(await canViewComplaintInFull(viewer, complaint))) {
+        throw ApiError.forbidden("You are not allowed to update this complaint.");
     }
 
     const errors: ErrorDetail = {};
     let status: ComplaintStatus | undefined;
+    let outcome: CaseOutcome | undefined;
     if (body.status !== undefined) {
         if (typeof body.status !== "string" || !STATUSES.includes(body.status as ComplaintStatus)) {
             errors.status = "Choose a valid status.";
         } else {
             status = body.status as ComplaintStatus;
+        }
+    }
+    if (body.outcome !== undefined) {
+        if (typeof body.outcome !== "string" || !OUTCOMES.includes(body.outcome as CaseOutcome)) {
+            errors.outcome = "Choose a valid case outcome.";
+        } else {
+            outcome = body.outcome as CaseOutcome;
+            if (status === undefined) status = outcome === "ongoing" ? "active" : "resolved";
         }
     }
 
@@ -301,13 +404,169 @@ export const updateComplaint = async (
         complaint.status = status;
         complaint.timeline.push({
             title: statusLabel[status],
-            detail: "The complaint status was updated by the filer.",
+            detail: `The complaint status was updated by ${actorLabel(viewer)} (${viewer.role}).`,
             date: new Date(),
             state: status === "resolved" ? "done" : "current",
+        });
+    }
+    if (outcome && outcome !== complaint.outcome) {
+        complaint.outcome = outcome;
+        const labels: Record<CaseOutcome, string> = {
+            ongoing: "Search is ongoing",
+            found: "Person found",
+            not_found: "Person could not be found",
+        };
+        complaint.timeline.push({
+            title: labels[outcome],
+            detail: `The case outcome was updated by ${actorLabel(viewer)} (${viewer.role}).`,
+            date: new Date(),
+            state: outcome === "ongoing" ? "current" : "done",
         });
     }
     if (event) complaint.timeline.push(event);
 
     await complaint.save();
+    await recordAudit(viewer, {
+        action: "complaint.update",
+        targetType: "complaint",
+        targetId: String(complaint._id),
+        detail: `Updated ${complaint.case_ref ?? String(complaint._id)}${status ? ` to ${status}` : ""}${outcome ? ` (${outcome})` : ""}.`,
+    });
+    return complaint;
+};
+
+/** An admin hands a case to one of their verified officers. */
+export const assignComplaint = async (
+    viewer: UserDocument,
+    id: string,
+    body: Record<string, unknown>,
+): Promise<ComplaintDocument> => {
+    if (viewer.role !== "admin" && viewer.role !== "superadmin") {
+        throw ApiError.forbidden("Only admins can assign a case.");
+    }
+
+    const complaint = await findComplaint(id);
+    if (!(await canViewComplaintInFull(viewer, complaint))) {
+        throw ApiError.forbidden("You are not allowed to assign this complaint.");
+    }
+
+    const officerId = typeof body.officer_id === "string" ? body.officer_id.trim() : "";
+    if (!Types.ObjectId.isValid(officerId)) {
+        throw ApiError.unprocessable("Choose a valid officer.");
+    }
+
+    const officer = await User.findById(officerId);
+    if (!officer || (officer.role !== "police" && officer.role !== "ngo")) {
+        throw ApiError.unprocessable("Choose a police or NGO account.");
+    }
+    if (!officer.is_active || officer.verification_status !== "verified") {
+        throw ApiError.unprocessable("Only an active, verified officer can be assigned a case.");
+    }
+    if (viewer.role === "admin" && String(officer.assigned_admin_id) !== String(viewer._id)) {
+        throw ApiError.forbidden("You can only assign officers assigned to you.");
+    }
+
+    complaint.assigned_officer_id = officer._id;
+    complaint.assigned_officer_role = officer.role;
+    complaint.assigned_admin_id = officer.assigned_admin_id ?? (viewer.role === "admin" ? viewer._id : undefined);
+    complaint.assigned_at = new Date();
+    complaint.assigned_by = viewer._id;
+    complaint.timeline.push({
+        title: "Case assigned",
+        date: new Date(),
+        detail: `${actorLabel(viewer)} assigned this case to ${officer.first_name} ${officer.last_name} (${officer.role}).`,
+        state: "current",
+    });
+
+    await complaint.save();
+    await recordAudit(viewer, {
+        action: "complaint.assign",
+        targetType: "complaint",
+        targetId: String(complaint._id),
+        detail: `Assigned ${complaint.case_ref ?? String(complaint._id)} to ${officer.first_name} ${officer.last_name}.`,
+    });
+    return complaint;
+};
+
+/** A verified officer takes an unassigned case. */
+export const claimComplaint = async (viewer: UserDocument, id: string): Promise<ComplaintDocument> => {
+    if (viewer.role !== "police" && viewer.role !== "ngo") {
+        throw ApiError.forbidden("Only police or NGO officers can claim a case.");
+    }
+    if (viewer.verification_status !== "verified") {
+        throw ApiError.forbidden("Your account must be verified before you can claim a case.");
+    }
+
+    const complaint = await findComplaint(id);
+    if (complaint.status === "resolved") {
+        throw ApiError.unprocessable("A resolved case cannot be claimed.");
+    }
+    if (
+        complaint.assigned_officer_id &&
+        String(complaint.assigned_officer_id) !== String(viewer._id)
+    ) {
+        throw ApiError.forbidden("This case is already assigned to another officer.");
+    }
+
+    complaint.assigned_officer_id = viewer._id;
+    complaint.assigned_officer_role = viewer.role;
+    complaint.assigned_admin_id = viewer.assigned_admin_id;
+    complaint.assigned_at = new Date();
+    complaint.assigned_by = viewer._id;
+    complaint.timeline.push({
+        title: "Case claimed",
+        date: new Date(),
+        detail: `${actorLabel(viewer)} (${viewer.role}) claimed this case.`,
+        state: "current",
+    });
+
+    await complaint.save();
+    await recordAudit(viewer, {
+        action: "complaint.claim",
+        targetType: "complaint",
+        targetId: String(complaint._id),
+        detail: `Claimed ${complaint.case_ref ?? String(complaint._id)}.`,
+    });
+    return complaint;
+};
+
+/** Case notes are for people who can already open the full record. */
+export const addComplaintNote = async (
+    viewer: UserDocument,
+    id: string,
+    body: Record<string, unknown>,
+): Promise<ComplaintDocument> => {
+    const complaint = await findComplaint(id);
+    if (!(await canViewComplaintInFull(viewer, complaint))) {
+        throw ApiError.forbidden("You are not allowed to add a note to this complaint.");
+    }
+
+    const text = trimTo(body.body, 1000);
+    if (text.length < 3) {
+        throw ApiError.unprocessable("A note must be at least 3 characters long.");
+    }
+
+    complaint.notes.push({
+        _id: new Types.ObjectId(),
+        author_id: viewer._id,
+        author_name: actorLabel(viewer),
+        author_role: viewer.role,
+        body: text,
+        created_at: new Date(),
+    });
+    complaint.timeline.push({
+        title: "Case note added",
+        date: new Date(),
+        detail: `${actorLabel(viewer)} added a case note.`,
+        state: "current",
+    });
+
+    await complaint.save();
+    await recordAudit(viewer, {
+        action: "complaint.note",
+        targetType: "complaint",
+        targetId: String(complaint._id),
+        detail: `Added a note to ${complaint.case_ref ?? String(complaint._id)}.`,
+    });
     return complaint;
 };

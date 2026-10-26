@@ -6,6 +6,8 @@ import registrationRoutes from "../features/registration/registration.routes";
 import usersRoutes from "../features/users/users.routes";
 import verificationRoutes from "../features/verification/verification.routes";
 import complaintsRoutes from "../features/complaints/complaints.routes";
+import adminRoutes from "../features/admin/admin.routes";
+import reportsRoutes from "../features/reports/reports.routes";
 
 /**
  * Every feature router is mounted here and nowhere else, so the full API
@@ -25,12 +27,17 @@ import complaintsRoutes from "../features/complaints/complaints.routes";
  *                      PATCH /me/ngo      re-queued for an admin review
  *   /api/verification  admin review queue
  *   /api/complaints    missing-person reports
- *                      GET  /              every case, as public summaries
- *                      GET  /:id           full for the filer (and their admin)
- *                      PATCH /:id          filer updates status / timeline
+ *                      GET  /              scoped summaries, paginated
+ *                      GET  /:id           full for the filer/assigned/admin
+ *                      PATCH /:id          update status / timeline
+ *                      PATCH /:id/assign   admin assigns a verified officer
+ *                      POST /:id/claim     verified officer claims a case
+ *                      POST /:id/notes     add a case note
  *                      POST /public        filed by a member
  *                      POST /police        filed by a verified police account
  *                      POST /ngo           filed by a verified NGO account
+ *   /api/reports       report an account (POST /, GET /mine)
+ *   /api/admin         admin overview, reports, suspensions, audit
  */
 const ApiRouter = Router();
 
@@ -41,5 +48,7 @@ ApiRouter.use("/register", registrationRoutes);
 ApiRouter.use("/users", usersRoutes);
 ApiRouter.use("/verification", verificationRoutes);
 ApiRouter.use("/complaints", complaintsRoutes);
+ApiRouter.use("/reports", reportsRoutes);
+ApiRouter.use("/admin", adminRoutes);
 
 export default ApiRouter;

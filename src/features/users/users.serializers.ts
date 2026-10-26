@@ -22,7 +22,8 @@ export const toPublicUser = (user: UserDocument | UserInterface): PublicUser => 
     aadhaar_masked: maskAadhaar(user.aadhaar),
     mobile: user.mobile,
     // The frontend scopes its whole admin console on this value.
-    adminId: user.role === "admin" ? String(user._id) : "",
+    adminId: user.role === "admin" || user.role === "superadmin" ? String(user._id) : "",
+    is_superadmin: user.role === "superadmin",
     verification_status: user.verification_status,
     is_active: user.is_active,
 });

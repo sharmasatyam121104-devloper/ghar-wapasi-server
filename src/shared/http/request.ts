@@ -17,6 +17,3 @@ export const currentUser = (req: Request): UserDocument => {
     if (!req.user) throw ApiError.unauthorized();
     return req.user;
 };
-
-/** The calling admin's id - the scope every verification query is filtered to. */
-export const callerAdminId = (req: Request): string => String(currentUser(req)._id);

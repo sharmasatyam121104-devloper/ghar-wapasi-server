@@ -73,6 +73,33 @@ npm run dev
 
 The server starts on `http://localhost:8080` by default (see `PORT` in `.env`).
 
+### Create a superadmin (CLI)
+
+There is deliberately no HTTP endpoint for creating a superadmin. Run:
+
+```bash
+npm run superadmin
+```
+
+The CLI asks for the first name, last name, optional email, mobile number,
+Aadhaar number and password at the prompt. Credentials are not read from
+environment variables - only the database connection comes from `.env`.
+
+### Test accounts (local development only)
+
+These accounts are already verified and can sign in at `/login`.
+
+| Role | Name | Email | Mobile | Password |
+| --- | --- | --- | --- | --- |
+| Superadmin | Demo Superadmin | `superadmin.demo@gharwapsi.in` | `9000000010` | `SuperDemo@2026` |
+| Admin | Demo Admin One | `admin.one@gharwapsi.in` | `9000000011` | `AdminOne@2026` |
+| Admin | Demo Admin Two | `admin.two@gharwapsi.in` | `9000000012` | `AdminTwo@2026` |
+
+The superadmin lands on `/superadmin/administrators` and can only use that
+create-admin page; the `/admin/*` review console is reserved for the two admin
+accounts. These are seeded local test credentials only - do not reuse them in
+production.
+
 Mongo does not have to be running for the server to boot. Without it the process
 comes up anyway, `/health` reports `"database":"disconnected"`, and every `/api`
 route answers `503` - so the docs stay browsable while the database is down.
@@ -83,6 +110,8 @@ Swagger UI: **http://localhost:8080/docs**
 
 Raw spec: `http://localhost:8080/docs/openapi.json`
 
-The spec is hand-written in `src/docs/openapi.ts` and covers the full surface -
-23 paths, 25 operations - including which cookie or header authenticates each
-one and the `503` every `/api` route returns when Mongo is unreachable.
+The spec is hand-written in `src/docs/openapi.ts` and currently documents 30
+paths and 33 operations, including which cookie or header authenticates each
+one and the `503` every `/api` route returns when Mongo is unreachable. The
+newer admin, report, assignment, claim and note endpoints are not in the spec
+yet.
