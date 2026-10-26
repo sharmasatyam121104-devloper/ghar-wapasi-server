@@ -3,8 +3,8 @@
  * scaffold were dropped: neither has a portal, a route, or a set of screens in
  * ghar-wapasi-ui. The frontend's lowercase values are the contract.
  *
- * `superadmin` is the one role the frontend has no screen for. It exists only
- * to hand out `admin` accounts, so it is deliberately not part of any portal.
+ * `superadmin` uses the admin console with global scope and is the only role
+ * that may create `admin` accounts. It is minted by the CLI, not over HTTP.
  */
 export type UserRole = "public" | "police" | "ngo" | "admin" | "superadmin";
 

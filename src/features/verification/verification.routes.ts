@@ -7,6 +7,7 @@ const VerificationRouter = Router();
 /*
  * Admin only. Every handler here also re-checks `assigned_admin_id` against
  * the caller, so an admin cannot reach another admin's queue by guessing an id.
+ * A superadmin reviews across every queue.
  */
 VerificationRouter.use(requireAuth, requireAdmin);
 

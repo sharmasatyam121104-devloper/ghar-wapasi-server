@@ -41,9 +41,11 @@ const getStaffUser = async (id: string): Promise<UserDocument> => {
 /**
  * Scoping guard. The frontend does the same check, but the client is not a
  * security boundary - an admin must never see or touch another admin's queue.
+ * A superadmin reviews across every admin's queue.
  */
-const assertAssignedTo = (user: UserDocument, adminId: string): void => {
-    if (!user.assigned_admin_id || String(user.assigned_admin_id) !== adminId) {
+const assertCanManage = (user: UserDocument, viewer: UserDocument): void => {
+    if (viewer.role === "superadmin") return;
+    if (!user.assigned_admin_id || String(user.assigned_admin_id) !== String(viewer._id)) {
         throw ApiError.notFound("That verification request could not be found.");
     }
 };
@@ -53,13 +55,13 @@ const assertAssignedTo = (user: UserDocument, adminId: string): void => {
 /* ------------------------------------------------------------------ */
 
 export const listVerificationRequests = async (
-    adminId: string,
+    viewer: UserDocument,
     query: ListQuery = {},
 ): Promise<ListResult<VerificationRecord>> => {
     const filter: QueryFilter<UserInterface> = {
         role: { $in: ["police", "ngo"] },
-        assigned_admin_id: adminId,
     };
+    if (viewer.role !== "superadmin") filter.assigned_admin_id = viewer._id;
 
     if (query.verificationStatus) filter.verification_status = query.verificationStatus;
 
@@ -92,11 +94,11 @@ export const listVerificationRequests = async (
 };
 
 export const getVerificationRequest = async (
-    adminId: string,
+    viewer: UserDocument,
     userId: string,
 ): Promise<VerificationRecord> => {
     const user = await getStaffUser(userId);
-    assertAssignedTo(user, adminId);
+    assertCanManage(user, viewer);
     return toVerificationRecord(user);
 };
 
@@ -109,12 +111,12 @@ export const getVerificationRequest = async (
  * frontend exactly: an http/https link, a readable date, and a future moment.
  */
 export const scheduleCall = async (
-    adminId: string,
+    viewer: UserDocument,
     userId: string,
     input: ScheduleCallInput,
 ): Promise<VerificationRecord> => {
     const user = await getStaffUser(userId);
-    assertAssignedTo(user, adminId);
+    assertCanManage(user, viewer);
 
     const link = typeof input.link === "string" ? input.link.trim() : "";
     if (!link) {
@@ -141,7 +143,7 @@ export const scheduleCall = async (
         link,
         time: when,
         note: note || undefined,
-        scheduled_by: adminId as unknown as Types.ObjectId,
+        scheduled_by: viewer._id,
         scheduled_at: new Date(),
     };
     await user.save();
@@ -149,9 +151,9 @@ export const scheduleCall = async (
     return toVerificationRecord(user);
 };
 
-export const clearCall = async (adminId: string, userId: string): Promise<VerificationRecord> => {
+export const clearCall = async (viewer: UserDocument, userId: string): Promise<VerificationRecord> => {
     const user = await getStaffUser(userId);
-    assertAssignedTo(user, adminId);
+    assertCanManage(user, viewer);
     if (!user.verification_call?.link) {
         throw ApiError.conflict("There is no scheduled call to clear.");
     }
@@ -168,9 +170,9 @@ export const clearCall = async (adminId: string, userId: string): Promise<Verifi
  * Approval is blocked until the admin has supplied BOTH a link and a time.
  * This is the server-side half of the frontend's `approvalBlockReason`.
  */
-export const approveUser = async (adminId: string, userId: string): Promise<VerificationRecord> => {
+export const approveUser = async (viewer: UserDocument, userId: string): Promise<VerificationRecord> => {
     const user = await getStaffUser(userId);
-    assertAssignedTo(user, adminId);
+    assertCanManage(user, viewer);
 
     if (user.verification_status === "verified") {
         throw ApiError.conflict("This account is already verified.");
@@ -198,7 +200,7 @@ export const approveUser = async (adminId: string, userId: string): Promise<Veri
 
     user.verification_status = "verified";
     user.rejection_reason = undefined;
-    user.reviewed_by = adminId as unknown as Types.ObjectId;
+    user.reviewed_by = viewer._id;
     user.reviewed_at = new Date();
     await user.save();
 
@@ -206,12 +208,12 @@ export const approveUser = async (adminId: string, userId: string): Promise<Veri
 };
 
 export const rejectUser = async (
-    adminId: string,
+    viewer: UserDocument,
     userId: string,
     reason: unknown,
 ): Promise<VerificationRecord> => {
     const user = await getStaffUser(userId);
-    assertAssignedTo(user, adminId);
+    assertCanManage(user, viewer);
 
     const text = typeof reason === "string" ? reason.trim() : "";
     if (text.length < REJECTION_REASON_MIN) {
@@ -228,7 +230,7 @@ export const rejectUser = async (
 
     user.verification_status = "rejected";
     user.rejection_reason = text;
-    user.reviewed_by = adminId as unknown as Types.ObjectId;
+    user.reviewed_by = viewer._id;
     user.reviewed_at = new Date();
     await user.save();
 

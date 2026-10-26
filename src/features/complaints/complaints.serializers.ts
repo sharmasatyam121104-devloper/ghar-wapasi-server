@@ -11,8 +11,13 @@ export interface PublicComplaint {
     id: string;
     case_ref: string;
     status: string;
+    outcome: string;
     created_by: string;
     created_by_role: string;
+    assigned_officer_id: string;
+    assigned_officer_role: string;
+    assigned_admin_id: string;
+    assigned_at?: Date;
 
     person_name: string;
     person_age: number;
@@ -53,6 +58,14 @@ export interface PublicComplaint {
     fir_copy_files: string[];
 
     timeline: { title: string; date: Date; detail: string; state: string }[];
+    case_notes: {
+        id: string;
+        author_id: string;
+        author_name: string;
+        author_role: string;
+        body: string;
+        created_at: Date;
+    }[];
 
     created_at?: Date;
     updated_at?: Date;
@@ -68,8 +81,13 @@ export interface ComplaintSummary {
     id: string;
     case_ref: string;
     status: string;
+    outcome: string;
     created_by: string;
     created_by_role: string;
+    assigned_officer_id: string;
+    assigned_officer_role: string;
+    assigned_admin_id: string;
+    assigned_at?: Date;
 
     person_name: string;
     person_age: number;
@@ -101,8 +119,13 @@ export const toComplaintSummary = (complaint: ComplaintDocument): ComplaintSumma
     id: String(complaint._id),
     case_ref: complaint.case_ref ?? "",
     status: complaint.status,
+    outcome: complaint.outcome ?? "ongoing",
     created_by: String(complaint.created_by),
     created_by_role: complaint.created_by_role,
+    assigned_officer_id: complaint.assigned_officer_id ? String(complaint.assigned_officer_id) : "",
+    assigned_officer_role: complaint.assigned_officer_role ?? "",
+    assigned_admin_id: complaint.assigned_admin_id ? String(complaint.assigned_admin_id) : "",
+    assigned_at: complaint.assigned_at,
 
     person_name: complaint.person_name,
     person_age: complaint.person_age,
@@ -139,8 +162,13 @@ export const toPublicComplaint = (complaint: ComplaintDocument): PublicComplaint
     id: String(complaint._id),
     case_ref: complaint.case_ref ?? "",
     status: complaint.status,
+    outcome: complaint.outcome ?? "ongoing",
     created_by: String(complaint.created_by),
     created_by_role: complaint.created_by_role,
+    assigned_officer_id: complaint.assigned_officer_id ? String(complaint.assigned_officer_id) : "",
+    assigned_officer_role: complaint.assigned_officer_role ?? "",
+    assigned_admin_id: complaint.assigned_admin_id ? String(complaint.assigned_admin_id) : "",
+    assigned_at: complaint.assigned_at,
 
     person_name: complaint.person_name,
     person_age: complaint.person_age,
@@ -185,6 +213,15 @@ export const toPublicComplaint = (complaint: ComplaintDocument): PublicComplaint
         date: event.date,
         detail: event.detail,
         state: event.state,
+    })),
+
+    case_notes: (complaint.notes ?? []).map((note) => ({
+        id: String(note._id),
+        author_id: String(note.author_id),
+        author_name: note.author_name,
+        author_role: note.author_role,
+        body: note.body,
+        created_at: note.created_at,
     })),
 
     created_at: complaint.created_at,

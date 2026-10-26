@@ -5,6 +5,8 @@ import { ApiError } from "../../shared/errors/ApiError";
 import { asyncHandler } from "../../shared/http/asyncHandler";
 import { currentUser, routeParam } from "../../shared/http/request";
 import { sendSuccess } from "../../shared/http/response";
+import { Complaint } from "../complaints/complaints.model";
+import { User } from "../users/users.model";
 import { EXTENSION_BY_MIME, newTmpFileName, resolveStoredFile, tmpDirectory } from "./file.storage";
 
 /** What multer writes to `req.files` for the disk storage engine. */
@@ -70,9 +72,38 @@ export const uploadFiles = asyncHandler(async (req: Request, res: Response) => {
     );
 });
 
+const COMPLAINT_FILE_FIELDS = [
+    "person_photos",
+    "location_photos",
+    "complainant_id_files",
+    "member_id_files",
+    "fir_copy_files",
+];
+
+/** True when the file belongs to a case this officer/admin is responsible for. */
+const isFileOnAccessibleCase = async (
+    viewerId: string,
+    viewerRole: string,
+    reference: string,
+): Promise<boolean> => {
+    const fileMatch = { $or: COMPLAINT_FILE_FIELDS.map((field) => ({ [field]: reference })) };
+    if (viewerRole === "admin") {
+        return Boolean(
+            await Complaint.exists({ $and: [{ assigned_admin_id: viewerId }, fileMatch] }),
+        );
+    }
+    if (viewerRole === "police" || viewerRole === "ngo") {
+        return Boolean(
+            await Complaint.exists({ $and: [{ assigned_officer_id: viewerId }, fileMatch] }),
+        );
+    }
+    return false;
+};
+
 /**
- * Serves one stored document. Admins reviewing a registration may open any
- * file; everyone else may only open a file from their own folder.
+ * Serves one stored document. A member may open their own folder; an admin
+ * only folders/files belonging to users or cases assigned to them; a verified
+ * officer only files on a case assigned to them; a superadmin anything.
  */
 export const downloadFile = asyncHandler(async (req: Request, res: Response) => {
     const role = routeParam(req, "role");
@@ -85,8 +116,24 @@ export const downloadFile = asyncHandler(async (req: Request, res: Response) => 
     }
 
     const viewer = currentUser(req);
-    const isAdmin = viewer.role === "admin" || viewer.role === "superadmin";
-    if (!isAdmin && String(viewer._id) !== userId) {
+    if (
+        (viewer.role === "police" || viewer.role === "ngo") &&
+        viewer.verification_status !== "verified"
+    ) {
+        throw ApiError.forbidden("Your account must be verified before you can view files.");
+    }
+
+    const viewerId = String(viewer._id);
+    let allowed = viewer.role === "superadmin" || viewerId === userId;
+
+    if (!allowed && viewer.role === "admin") {
+        allowed = Boolean(await User.exists({ _id: userId, assigned_admin_id: viewer._id }));
+    }
+    if (!allowed && (viewer.role === "admin" || viewer.role === "police" || viewer.role === "ngo")) {
+        allowed = await isFileOnAccessibleCase(viewerId, viewer.role, `${role}/${userId}/${fileName}`);
+    }
+
+    if (!allowed) {
         throw ApiError.forbidden("You are not allowed to view this file.");
     }
 

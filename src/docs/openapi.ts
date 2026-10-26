@@ -149,8 +149,10 @@ export const openApiDocument = {
             "`POST /api/register/admin`, and start `verified`. `superadmin` is a step",
             "above that: it is the only role allowed to call that endpoint, and it is",
             "minted by the admin CLI rather than over HTTP, so no API route creates",
-            "one. A superadmin is a provisioner only - it does not inherit the review",
-            "console, which stays with `admin`.",
+            "one. It inherits the admin console's operational scope - every review",
+            "queue and every case - but the generic account directory is never global.",
+            "A superadmin may read only its own account through `/api/users`; an ordinary",
+            "admin may read only itself plus the staff assigned to it.",
         ].join("\n"),
     },
     servers: [
@@ -164,8 +166,8 @@ export const openApiDocument = {
         { name: "Files", description: "Document uploads and delivery for police and NGO registration." },
         { name: "Profile", description: "The caller's own account." },
         { name: "OTP", description: "One-time codes, and the single-use receipts that authorise a contact change." },
-        { name: "Users", description: "Admin-only listing and lookup." },
-        { name: "Verification", description: "Admin-only review queue for police and NGO." },
+        { name: "Users", description: "Own-account or scoped-admin listing and lookup; never a global directory." },
+        { name: "Verification", description: "Admin and superadmin review queue for police and NGO." },
         { name: "Complaints", description: "Missing-person reports filed by a member, a police or an NGO account." },
     ],
     components: {
@@ -916,10 +918,12 @@ export const openApiDocument = {
         "/api/auth/forgot-password": {
             post: {
                 tags: ["Auth"],
-                summary: "Request a password reset",
+                summary: "Request password-reset help",
                 description: [
-                    "Always succeeds, whether or not the account exists - a reset flow",
-                    'that reports "not found" lets anyone enumerate registered users.',
+                    "Self-service reset is not implemented yet. The endpoint validates the",
+                    "identifier and tells the caller to contact an administrator; it never",
+                    "sends a reset link. It succeeds whether or not the account exists, so",
+                    'a "not found" response cannot be used to enumerate registered users.',
                 ].join("\n"),
                 security: [],
                 requestBody: jsonBody({
@@ -933,7 +937,7 @@ export const openApiDocument = {
                     200: ok(
                         "Accepted.",
                         { type: "object" },
-                        "If that account exists, a reset link has been sent.",
+                        "Password reset is not automated yet. Please contact an administrator with your registered email, mobile number or Aadhaar number.",
                     ),
                     400: errorResponse("The identifier matches no known shape."),
                     503: failures.unavailable,
@@ -1526,7 +1530,13 @@ export const openApiDocument = {
         "/api/users": {
             get: {
                 tags: ["Users"],
-                summary: "List accounts (admin only)",
+                summary: "List accounts within the caller's own scope (admin only)",
+                description: [
+                    "A superadmin receives only its own account. An ordinary admin",
+                    "receives itself plus users whose `assigned_admin_id` is that admin.",
+                    "The `role` filter can narrow these results but cannot widen them, so",
+                    "it is not possible to enumerate another role's accounts.",
+                ].join("\n"),
                 parameters: [
                     ...pageParams,
                     {
@@ -1554,7 +1564,13 @@ export const openApiDocument = {
         "/api/users/{id}": {
             get: {
                 tags: ["Users"],
-                summary: "Fetch one account (admin only)",
+                summary: "Fetch one account within the caller's own scope (admin only)",
+                description: [
+                    "A superadmin may fetch only its own account. An ordinary admin may",
+                    "fetch itself or a user assigned to it. Any other target returns 404,",
+                    "including a superadmin target requested by an ordinary admin, so the",
+                    "lookup cannot be used to enumerate accounts. Non-admin roles get 403.",
+                ].join("\n"),
                 parameters: [userIdParam],
                 responses: {
                     200: ok("The account.", ref("User")),
@@ -1569,9 +1585,9 @@ export const openApiDocument = {
         "/api/verification/requests": {
             get: {
                 tags: ["Verification"],
-                summary: "The caller's review queue (admin only)",
+                summary: "The review queue (admin or superadmin)",
                 description:
-                    "Scoped to the signed-in admin's own queue. An admin cannot read another admin's queue, and the check is repeated per request, not only here.",
+                    "An admin sees only their own queue and cannot read another admin's queue. A superadmin sees every admin's queue. The scope is checked per request, not only here.",
                 parameters: [
                     ...pageParams,
                     {
@@ -1581,7 +1597,7 @@ export const openApiDocument = {
                     },
                 ],
                 responses: {
-                    200: ok("A page of the admin's queue.", paginated("VerificationRecord")),
+                    200: ok("A page of the scoped review queue.", paginated("VerificationRecord")),
                     401: failures.unauthorized,
                     503: failures.unavailable,
                     403: failures.forbidden,
@@ -1591,7 +1607,7 @@ export const openApiDocument = {
         "/api/verification/requests/{id}": {
             get: {
                 tags: ["Verification"],
-                summary: "One verification request (admin only)",
+                summary: "One verification request (admin or superadmin)",
                 parameters: [userIdParam],
                 responses: {
                     200: ok("The verification request.", ref("VerificationRecord")),
@@ -1605,7 +1621,7 @@ export const openApiDocument = {
         "/api/verification/requests/{id}/call": {
             post: {
                 tags: ["Verification"],
-                summary: "Schedule the verification call (admin only)",
+                summary: "Schedule the verification call (admin or superadmin)",
                 description:
                     "The admin owns the slot; the applicant never picks their own time. The link must be http or https, and the time must parse and be in the future.",
                 parameters: [userIdParam],
@@ -1635,7 +1651,7 @@ export const openApiDocument = {
             },
             delete: {
                 tags: ["Verification"],
-                summary: "Clear the scheduled call (admin only)",
+                summary: "Clear the scheduled call (admin or superadmin)",
                 parameters: [userIdParam],
                 responses: {
                     200: ok(
@@ -1654,7 +1670,7 @@ export const openApiDocument = {
         "/api/verification/requests/{id}/approve": {
             post: {
                 tags: ["Verification"],
-                summary: "Approve a police or NGO account (admin only)",
+                summary: "Approve a police or NGO account (admin or superadmin)",
                 description:
                     "Blocked until the admin has supplied both a meeting link and a time - approval is a statement that the viva actually happened.",
                 parameters: [userIdParam],
@@ -1672,7 +1688,7 @@ export const openApiDocument = {
         "/api/verification/requests/{id}/reject": {
             post: {
                 tags: ["Verification"],
-                summary: "Reject a police or NGO account (admin only)",
+                summary: "Reject a police or NGO account (admin or superadmin)",
                 description:
                     "A scheduled call is not required to reject. The reason is shown to the applicant, so it has to be at least 10 characters.",
                 parameters: [userIdParam],
@@ -1751,14 +1767,16 @@ export const openApiDocument = {
                 tags: ["Files"],
                 summary: "Download a stored document",
                 description: [
-                    "Serves the stored file itself (image or PDF, content type set from the",
-                    "extension), for inline viewing. This is the URL a verification record's",
-                    "`documents` and a profile's `*_files` arrays point at.",
+                    "Serves the stored file as a forced download (`application/octet-stream`",
+                    "with `Content-Disposition: attachment`), never as an inline page. This is",
+                    "the URL a verification record's `documents` and a profile's `*_files`",
+                    "arrays point at.",
                     "",
-                    "Access: the account the folder belongs to, or an admin/superadmin. Nobody",
-                    "else can open it, and the path is checked so `..` cannot escape the",
-                    "folder. The file is never stored inline in the database, so this is the",
-                    "only way the frontend shows it.",
+                    "Access: the account the folder belongs to; an admin/superadmin; or a",
+                    "police/NGO account that is verified and assigned to a case containing the",
+                    "file. Unverified police/NGO accounts cannot download files. The path is",
+                    "checked so `..` cannot escape the folder, and the file is never stored",
+                    "inline in the database.",
                 ].join("\n"),
                 parameters: [
                     {
@@ -1784,9 +1802,9 @@ export const openApiDocument = {
                     },
                 ],
                 responses: {
-                    200: { description: "The file, with its content type set from the extension." },
+                    200: { description: "The file as an attachment, sent as application/octet-stream." },
                     401: failures.unauthorized,
-                    403: errorResponse("Signed in, but the caller is neither the owner nor an admin."),
+                    403: errorResponse("The caller is not allowed to download this file, or a police/NGO account is not verified."),
                     404: failures.notFound,
                     503: failures.unavailable,
                 },
@@ -1797,10 +1815,12 @@ export const openApiDocument = {
                 tags: ["Complaints"],
                 summary: "List missing-person reports",
                 description: [
-                    "Every lodged report, newest first, as public summaries - the same",
-                    "trimmed shape every signed-in account sees. Contact details, Aadhaar",
-                    "numbers and uploaded ID/FIR documents are never included here; open a",
-                    "single case to read those where you are entitled to.",
+                    "Scoped reports, newest first, as public summaries. A public account sees",
+                    "its own filings; an admin sees cases tied to its assigned users; a",
+                    "superadmin sees everything. Police and NGO accounts see registry",
+                    "summaries only while verified. Contact details, Aadhaar numbers and",
+                    "uploaded ID/FIR documents are never included here; open a single case to",
+                    "read those where you are entitled to.",
                 ].join("\n"),
                 responses: {
                     200: ok("The reports, newest first.", {
@@ -1828,10 +1848,10 @@ export const openApiDocument = {
                 tags: ["Complaints"],
                 summary: "Read one missing-person report",
                 description: [
-                    "Returns the full record when the caller filed the complaint or is the",
-                    "admin assigned to the account that filed it. Any other signed-in account",
-                    "(including a police or NGO officer who did not file it) gets the same",
-                    "public summary as the list.",
+                    "Returns the full record to the filer, the assigned officer, the responsible",
+                    "admin or a superadmin. A verified police/NGO account sees the summary for",
+                    "other cases; an unverified police/NGO account is denied entirely. Callers",
+                    "outside the case scope receive 404.",
                 ].join("\n"),
                 responses: {
                     200: ok("The report - full or summarised for this caller.", {
@@ -1844,14 +1864,14 @@ export const openApiDocument = {
             },
             patch: {
                 tags: ["Complaints"],
-                summary: "Update a report you filed",
+                summary: "Update a report you can access",
                 description:
-                    "Only the account that filed the complaint may change its `status` or append a `timeline_event`. A new status writes its own timeline entry.",
+                    "The filer, assigned officer, responsible admin or superadmin may change `status`/`outcome` or append a `timeline_event`. An unverified police/NGO account is denied. A new status writes its own timeline entry.",
                 requestBody: jsonBody(ref("ComplaintUpdate")),
                 responses: {
                     200: ok("Updated.", ref("Complaint"), "Complaint updated successfully."),
                     401: failures.unauthorized,
-                    403: errorResponse("Signed in, but not as the account that filed this complaint."),
+                    403: errorResponse("The caller cannot access this complaint, or the police/NGO account is not verified."),
                     404: errorResponse("No complaint with that id."),
                     422: errorResponse("`status` is not valid, or a `timeline_event` field is missing."),
                     503: failures.unavailable,

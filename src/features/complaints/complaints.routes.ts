@@ -1,13 +1,16 @@
 import { Router } from "express";
 import * as controller from "./complaints.controller";
-import { requireAuth, requireRole, requireVerified } from "../../middleware/auth.middleware";
+import { requireAuth, requireRole, requireVerified, requireVerifiedRole } from "../../middleware/auth.middleware";
 
 /**
  * Complaints.
  *
- *   GET   /api/complaints          every case, as public summaries
- *   GET   /api/complaints/:id      full for the filer (and their admin), else summary
- *   PATCH /api/complaints/:id      filer only - status / timeline
+ *   GET   /api/complaints          scoped summaries, paginated; `?mine=1` for own
+ *   GET   /api/complaints/:id      full for the filer/assigned/officer/admin, else summary
+ *   PATCH /api/complaints/:id      filer, assigned officer, responsible admin, superadmin
+ *   PATCH /api/complaints/:id/assign  admin hands a case to a verified officer
+ *   POST  /api/complaints/:id/claim   verified officer claims an unassigned case
+ *   POST  /api/complaints/:id/notes   case note by anyone with full access
  *
  *   POST  /api/complaints/public   a member's own complaint
  *   POST  /api/complaints/police   filed by a verified police account
@@ -24,6 +27,9 @@ ComplaintsRouter.use(requireAuth);
 ComplaintsRouter.get("/", controller.list);
 ComplaintsRouter.get("/:id", controller.getById);
 ComplaintsRouter.patch("/:id", controller.update);
+ComplaintsRouter.patch("/:id/assign", requireRole("admin", "superadmin"), controller.assign);
+ComplaintsRouter.post("/:id/claim", ...requireVerifiedRole("police", "ngo"), controller.claim);
+ComplaintsRouter.post("/:id/notes", controller.addNote);
 
 ComplaintsRouter.post("/public", requireRole("public"), controller.registerPublicComplaint);
 ComplaintsRouter.post("/police", requireRole("police"), requireVerified, controller.registerPoliceComplaint);

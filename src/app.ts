@@ -1,5 +1,6 @@
 import cors from "cors";
 import express, { type Express } from "express";
+import helmet from "helmet";
 import morgan from "morgan";
 import { isDatabaseReady } from "./config/db.config";
 import { env } from "./config/env.config";
@@ -21,6 +22,22 @@ export const createApp = (): Express => {
     // trusting `X-Forwarded-For` when nothing sits in front lets any caller
     // forge the header and walk around the limiter.
     if (env.isProduction) app.set("trust proxy", 1);
+
+    // Version fingerprint nahi bhejna, aur bas security defaults ka ek layer:
+    // HSTS, frame/options/clickjack, dns-prefetch, nosniff etc. CSP off rakhi
+    // hai kyunki /docs ka Swagger UI `style-src 'unsafe-inline'` par chalta hai.
+    app.disable("x-powered-by");
+    app.use(
+        helmet({
+            contentSecurityPolicy: false,
+            crossOriginEmbedderPolicy: false,
+            hsts: {
+                maxAge: 31536000,
+                includeSubDomains: true,
+                preload: true,
+            },
+        }),
+    );
 
     app.use(
         cors({

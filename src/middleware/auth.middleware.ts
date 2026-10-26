@@ -5,6 +5,7 @@ import { readAccessToken } from "../shared/http/cookies";
 import { verifyAccessToken } from "../shared/tokens/jwt";
 import type { UserRole } from "../shared/types/roles";
 import { User, type UserDocument } from "../features/users/users.model";
+import { releaseExpiredSuspensionForUser } from "../features/admin/suspension.service";
 
 /**
  * Requires a valid access token and loads the user. The token may arrive in
@@ -24,8 +25,8 @@ export const requireAuth = asyncHandler(
         const user = await User.findById(payload.sub);
         if (!user) throw ApiError.unauthorized("Your account could not be found.");
 
-        if (!user.is_active) {
-            throw ApiError.forbidden("This account has been deactivated.");
+        if (!user.is_active && !(await releaseExpiredSuspensionForUser(user))) {
+            throw ApiError.forbidden("This account is suspended.");
         }
 
         req.user = user;
@@ -65,7 +66,8 @@ export const requireRole =
         next();
     };
 
-export const requireAdmin = requireRole("admin");
+/** Admin console routes; a superadmin has the same access plus all data. */
+export const requireAdmin = requireRole("admin", "superadmin");
 
 /**
  * The only role that may create another admin. Separate from `requireAdmin` on

@@ -43,10 +43,10 @@ export const updateNgoProfile = asyncHandler(async (req: Request, res: Response)
 /* ------------------------------------------------------------------ */
 
 export const listUsers = asyncHandler(async (req: Request, res: Response) => {
-    sendSuccess(res, await usersService.listUsers(parseListQuery(req)));
+    sendSuccess(res, await usersService.listUsers(currentUser(req), parseListQuery(req)));
 });
 
 export const getUser = asyncHandler(async (req: Request, res: Response) => {
-    const user = await usersService.getById(routeParam(req, "id"));
+    const user = await usersService.getScopedUser(currentUser(req), routeParam(req, "id"));
     sendSuccess(res, toPublicUser(user));
 });
